@@ -1,6 +1,6 @@
 const net = require('net');
 const fs = require('fs');
-const { type } = require('os');
+//const { type } = require('os');
 // 配置
 const PORT = 3000;
 const HOST = '0.0.0.0';

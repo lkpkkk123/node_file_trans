@@ -8,7 +8,7 @@
       "skipFiles": [
         "<node_internals>/**"
       ],
-      "program": "${workspaceFolder}/tcp-server.js",
+      "program": "${workspaceFolder}/tcp-server-fixed.js",
       "console": "integratedTerminal"
     },
     {

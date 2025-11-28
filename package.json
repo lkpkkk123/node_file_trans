@@ -6,8 +6,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --inspect index.js",
-    "server": "node tcp-server.js",
+    "server": "node tcp-server-fixed.js",
     "client": "node tcp-client.js",
+    "upload": "node tcp-client.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "echo \"Error: no test specified\" && exit 1"
