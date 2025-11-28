@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const CONFIG = {
   HOST: '127.0.0.1',
   PORT: 3000,
-  CHUNK_SIZE: 64 * 1024 // 64KB 每次发送
+  CHUNK_SIZE: 512 * 1024 // 512KB 每次读取，减少 syscalls
 };
 
 class FileUploadClient {
@@ -27,6 +27,8 @@ class FileUploadClient {
       this.socket = new net.Socket();
       
       this.socket.connect(this.port, this.host, () => {
+        this.socket.setNoDelay(true);
+        this.socket.setKeepAlive(true, 30000);
         console.log(`✓ 已连接到服务器 ${this.host}:${this.port}`);
         resolve();
       });
@@ -164,7 +166,8 @@ class FileUploadClient {
     
     // 创建读取流，从 startPos 开始
     this.currentFile.stream = fs.createReadStream(this.currentFile.path, {
-      start: this.startPos
+      start: this.startPos,
+      highWaterMark: CONFIG.CHUNK_SIZE
     });
     
     this.currentFile.sent = this.startPos;

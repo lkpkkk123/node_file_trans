@@ -1,6 +1,8 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { DEFAULT_MIN_VERSION } = require('tls');
+const { config } = require('process');
 
 // 配置
 const CONFIG = {
@@ -8,10 +10,12 @@ const CONFIG = {
   HOST: '0.0.0.0',
   UPLOAD_PATH: '/home/likp/test_uploads',
   MAX_CONNECTIONS: 100,
-  MAX_BUFFER_SIZE: 10 * 1024 * 1024, // 10MB
-  MAX_FILE_SIZE: 10 * 1024 * 1024 * 1024, // 1GB
-  CLIENT_TIMEOUT: 5 * 60 * 1000, // 5分钟
-  MAX_QUEUE_SIZE: 100
+  MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
+  MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
+  CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
+  MAX_QUEUE_SIZE: 128 * 1024 * 1024, // 128MB 排队缓冲
+  RESUME_QUEUE_THRESHOLD: 8 * 1024 * 1024, // 队列 < 8MB 恢复接收
+  FILE_WRITE_CHUNK: 512 * 1024 // 每次向磁盘写 512KB
 };
 
 const clients = new Map();
@@ -44,11 +48,12 @@ class myFile {
     this.filename = sanitizeFilename(filename);
     this.size = size;
     this.writtenSize = 0;
-    this.writeQueue = [];
+    this.writeQueue = Buffer.alloc(0);
     this.hasError = false;
     this.isClosed = false;
     this.stream = null;
     this.session = session; // 关联的会话对象
+    this.awaitDrain = false;
     
     // 验证文件大小
     if (size > CONFIG.MAX_FILE_SIZE) {
@@ -69,12 +74,15 @@ class myFile {
     // 重新创建写入流
     try {
       if (startPos > 0) {
-        this.stream = fs.createWriteStream(filePath, { 
+        this.stream = fs.createWriteStream(filePath, {
+          highWaterMark: 2 * 1024 * 1024, // 2MB 缓冲区
           flags: 'r+', 
           start: startPos 
         });
       } else {
-        this.stream = fs.createWriteStream(filePath);
+        this.stream = fs.createWriteStream(filePath, {
+          highWaterMark: 2 * 1024 * 1024, // 2MB 缓冲区
+        });
       }
       
       this.setupListeners();
@@ -96,8 +104,11 @@ class myFile {
     });
 
     this.stream.on('drain', () => {
-      console.log(`[文件] ${this.filename} 缓冲区已清空`);
+      this.awaitDrain = false;
       this.processQueue();
+      if (this.writeQueue.length === 0 && this.session) {
+        this.session.resumeReceiving();
+      }
     });
 
     this.stream.on('error', (err) => {
@@ -146,43 +157,59 @@ class myFile {
       return false;
     }
 
-    // 先处理队列
-    if (!this.processQueue()) {
-      return false;
+    // 如果存在积压，先排队
+    if (this.awaitDrain || this.writeQueue.length > 0) {
+      return this.enqueueData(data);
     }
-    
-    // 写入新数据
+
     const canWrite = this.stream.write(data);
+    this.writtenSize += data.length;
 
     if (!canWrite) {
-      console.log(`[文件] ${this.filename} 缓冲区已满，放入队列...`);
-      this.writeQueue.push(data);
-      
-      if (this.writeQueue.length > CONFIG.MAX_QUEUE_SIZE) {
-        console.error(`[文件] ${this.filename} 队列过长，拒绝写入`);
-        return false;
+      this.awaitDrain = true;
+      if (this.session) {
+        this.session.pauseReceiving('file-stream-backpressure');
       }
-    } else {
-      // 只有成功写入才增加计数
-      this.writtenSize += data.length;
     }
-    
     return true;
   }
 
+  enqueueData(data) {
+    this.writeQueue = Buffer.concat([this.writeQueue, data], this.writeQueue.length + data.length);
+
+    if (this.writeQueue.length > CONFIG.MAX_QUEUE_SIZE) {
+      console.error(`[文件] ${this.filename} 队列过长(${this.writeQueue.length} bytes)，拒绝写入`);
+      return false;
+    }
+
+    if (this.session && this.writeQueue.length > CONFIG.RESUME_QUEUE_THRESHOLD) {
+      this.session.pauseReceiving('disk-queue');
+    }
+
+    return this.processQueue();
+  }
+
   processQueue() {
-    while (this.writeQueue.length > 0) {
-      const data = this.writeQueue[0]; // 先看第一个，不移除
+    while (this.writeQueue.length > 0 && !this.awaitDrain) {
+      const chunkSize = Math.min(CONFIG.FILE_WRITE_CHUNK, this.writeQueue.length);
+      const data = this.writeQueue.slice(0, chunkSize);
       const canWrite = this.stream.write(data);
 
       if (!canWrite) {
-        console.log(`[文件] ${this.filename} 缓冲区再次满，暂停处理队列`);
-        return this.writeQueue.length <= CONFIG.MAX_QUEUE_SIZE;
+        console.log(`[文件] ${this.filename} 队列写入触发 drain，暂停继续`);
+        this.awaitDrain = true;
+        if (this.session) {
+          this.session.pauseReceiving('file-stream-backpressure');
+        }
+        return false;
       }
-      
-      // 成功写入，移除队列并更新计数
-      this.writeQueue.shift();
+
       this.writtenSize += data.length;
+      this.writeQueue = this.writeQueue.slice(chunkSize);
+    }
+
+    if (this.writeQueue.length < CONFIG.RESUME_QUEUE_THRESHOLD && !this.awaitDrain && this.session) {
+      this.session.resumeReceiving();
     }
     return true;
   }
@@ -226,7 +253,8 @@ class myFile {
       }
     }
     
-    this.writeQueue = [];
+    this.writeQueue = Buffer.alloc(0);
+    this.awaitDrain = false;
     this.isClosed = true;
   }
 }
@@ -242,8 +270,13 @@ class mySession {
     this.jsonMessage = null;
     this.currentFile = null;
     this.timeout = null;
+    this.isPaused = false;
+    this.pauseReason = null;
     
     console.log(`[新客户端] ${this.address} 已连接`);
+
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, 30000);
     
     // 设置超时
     this.resetTimeout();
@@ -253,6 +286,26 @@ class mySession {
     socket.on('error', this.onError.bind(this));
   }
 
+  pauseReceiving(reason = 'backpressure') {
+    if (this.isPaused || this.socket.destroyed) {
+      return;
+    }
+    this.isPaused = true;
+    this.pauseReason = reason;
+    this.socket.pause();
+    console.log(`[流控] ${this.address} 暂停接收 (${reason})`);
+  }
+
+  resumeReceiving() {
+    if (!this.isPaused || this.socket.destroyed) {
+      return;
+    }
+    this.isPaused = false;
+    this.pauseReason = null;
+    this.socket.resume();
+    console.log(`[流控] ${this.address} 恢复接收`);
+  }
+
   resetTimeout() {
     if (this.timeout) {
       clearTimeout(this.timeout);
@@ -260,7 +313,11 @@ class mySession {
     
     this.timeout = setTimeout(() => {
       console.log(`[超时] ${this.address} 连接超时`);
-      this.send('连接超时\n');
+      let resp = {
+        type: 'error',
+        message: '连接超时'
+      };
+      this.send(JSON.stringify(resp) + '\0');
       setTimeout(() => {
         this.socket.end();
       }, 100);
@@ -342,7 +399,11 @@ class mySession {
       
     } catch (err) {
       console.error(`[JSON错误] ${this.address} 解析失败: ${err.message}`);
-      this.send('JSON解析错误\n');
+      let resp = {
+        type: 'error',
+        message: 'JSON解析错误'
+      };
+      this.send(JSON.stringify(resp) + '\0');
       setTimeout(() => {
         this.socket.end();
       }, 100);
@@ -360,11 +421,12 @@ class mySession {
         // 检查是否断点续传
         if (files.has(msg.id)) {
           file = files.get(msg.id);
-          if (file.filename === sanitizeFilename(msg.filename)) {
+          if (file.size > file.writtenSize &&  file.filename === sanitizeFilename(msg.filename)) {
             startPos = file.writtenSize;
             file.Open(startPos, msg.filename);
             console.log(`[断点续传] ${msg.filename} 从 ${startPos} 继续`);
-          } else {
+          }
+          else {
             console.log('[警告] 文件名不匹配，创建新文件');
             file = new myFile(msg.id, msg.filename, msg.size, this);
             file.Open(0, msg.filename);
@@ -413,14 +475,14 @@ class mySession {
     if (toWrite > 0) {
       const dataToWrite = this.buffer.slice(0, toWrite);
       
-      const success = this.currentFile.write(dataToWrite);
-      if (!success&& !this.currentFile.isComplete()) {
+      const writeResult = this.currentFile.write(dataToWrite);
+      if (writeResult === false && !this.currentFile.isComplete()) {
         console.error(`[错误] ${this.address} 写入失败`);
         return 0;
       }
       
       this.buffer = this.buffer.slice(toWrite);
-      
+
       // 定期打印进度
       const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
       console.log(`[进度] ${this.address} ${progress}% (${this.currentFile.writtenSize}/${this.currentFile.size})`);
