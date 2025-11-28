@@ -4,7 +4,27 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "启动程序",
+      "name": "调试 TCP 服务器",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "program": "${workspaceFolder}/tcp-server.js",
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "调试 TCP 客户端",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "program": "${workspaceFolder}/tcp-client.js",
+      "console": "integratedTerminal"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "启动程序 (index.js)",
       "skipFiles": [
         "<node_internals>/**"
       ],
