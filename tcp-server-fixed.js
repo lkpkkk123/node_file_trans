@@ -1,8 +1,7 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
-const { DEFAULT_MIN_VERSION } = require('tls');
-const { config } = require('process');
+const crypto = require('crypto');
 
 // 配置
 const CONFIG = {
@@ -15,7 +14,8 @@ const CONFIG = {
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
   MAX_QUEUE_SIZE: 128 * 1024 * 1024, // 128MB 排队缓冲
   RESUME_QUEUE_THRESHOLD: 8 * 1024 * 1024, // 队列 < 8MB 恢复接收
-  FILE_WRITE_CHUNK: 512 * 1024 // 每次向磁盘写 512KB
+  FILE_WRITE_CHUNK: 512 * 1024, // 每次向磁盘写 512KB
+  CHECK_MD5: true // 是否在完成后校验 MD5
 };
 
 const clients = new Map();
@@ -43,7 +43,7 @@ function sanitizeFilename(filename) {
 }
 
 class myFile {
-  constructor(id, filename, size, session) {
+  constructor(id, filename, size, session, allowResume = false) {
     this.id = id;
     this.filename = sanitizeFilename(filename);
     this.size = size;
@@ -54,6 +54,8 @@ class myFile {
     this.stream = null;
     this.session = session; // 关联的会话对象
     this.awaitDrain = false;
+    this.filePath = path.join(CONFIG.UPLOAD_PATH, this.filename);
+    this.allowResume = allowResume;
     
     // 验证文件大小
     if (size > CONFIG.MAX_FILE_SIZE) {
@@ -69,7 +71,11 @@ class myFile {
     }
     
     const safeFilename = sanitizeFilename(fileName);
-    const filePath = path.join(CONFIG.UPLOAD_PATH, safeFilename);
+    if (safeFilename !== this.filename) {
+      this.filename = safeFilename;
+      this.filePath = path.join(CONFIG.UPLOAD_PATH, this.filename);
+    }
+    const filePath = this.filePath;
     
     // 重新创建写入流
     try {
@@ -117,7 +123,9 @@ class myFile {
       this.cleanup();
       
       // 从 Map 中移除
-      files.delete(this.id);
+      if (this.allowResume) {
+        files.delete(this.id);
+      }
       
       // 通知客户端
       if (this.session) {
@@ -257,6 +265,17 @@ class myFile {
     this.awaitDrain = false;
     this.isClosed = true;
   }
+
+  async computeMD5() {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('md5');
+      const stream = fs.createReadStream(this.filePath);
+
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', reject);
+    });
+  }
 }
 
 class mySession {
@@ -363,12 +382,6 @@ class mySession {
         setTimeout(() => {
           this.socket.end();
         }, 1000);
-      } else if (result === 2) {
-        const resp = {
-          type: 'finish',
-          message: '文件传输完成'
-        };
-        this.send(JSON.stringify(resp) + '\0');
       }
     }
   }
@@ -415,27 +428,31 @@ class mySession {
       console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, ID: ${msg.id}`);
       
       try {
+        const allowResume = Boolean(msg.resume);
         let file;
         let startPos = 0;
         
         // 检查是否断点续传
-        if (files.has(msg.id)) {
+        if (allowResume && files.has(msg.id)) {
           file = files.get(msg.id);
-          if (file.size > file.writtenSize &&  file.filename === sanitizeFilename(msg.filename)) {
+          if (file && file.allowResume && file.size > file.writtenSize &&  file.filename === sanitizeFilename(msg.filename)) {
             startPos = file.writtenSize;
             file.Open(startPos, msg.filename);
             console.log(`[断点续传] ${msg.filename} 从 ${startPos} 继续`);
-          }
-          else {
-            console.log('[警告] 文件名不匹配，创建新文件');
-            file = new myFile(msg.id, msg.filename, msg.size, this);
+          } else {
+            console.log('[警告] 文件名不匹配或不可续传，创建新文件');
+            file = new myFile(msg.id, msg.filename, msg.size, this, allowResume);
             file.Open(0, msg.filename);
-            files.set(msg.id, file);
+            if (file.allowResume) {
+              files.set(msg.id, file);
+            }
           }
         } else {
-          file = new myFile(msg.id, msg.filename, msg.size, this);
+          file = new myFile(msg.id, msg.filename, msg.size, this, allowResume);
           file.Open(0, msg.filename);
-          files.set(msg.id, file);
+          if (file.allowResume) {
+            files.set(msg.id, file);
+          }
         }
         
         this.currentFile = file;
@@ -490,13 +507,44 @@ class mySession {
     
     if (this.currentFile.isComplete()) {
       console.log(`[完成] ${this.address} 文件: ${this.currentFile.filename}`);
-      this.currentFile.close();
+      const finishedFile = this.currentFile;
       this.currentFile = null;
       this.isFirstMessage = true;
+      this.handleCompletedFile(finishedFile);
       return 2;
     }
     
     return 1;
+  }
+
+  async handleCompletedFile(file) {
+    try {
+      await file.close();
+
+      let serverMd5 = null;
+      let checksumMatch = null;
+      if (CONFIG.CHECK_MD5) {
+        serverMd5 = await file.computeMD5();
+        checksumMatch = serverMd5 === file.id;
+        console.log(`[校验] ${file.filename} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.id}`}`);
+      }
+
+      const resp = {
+        type: 'finish',
+        message: '文件传输完成',
+        server_md5: serverMd5,
+        expected_md5: file.id,
+        match: checksumMatch
+      };
+      this.send(JSON.stringify(resp) + '\0');
+    } catch (err) {
+      console.error(`[校验错误] ${file.filename}: ${err.message}`);
+      this.notifyError('服务器校验失败: ' + err.message);
+    } finally {
+      if (file.allowResume) {
+        files.delete(file.id);
+      }
+    }
   }
 
   onError(err) {
@@ -518,7 +566,7 @@ class mySession {
     // 关闭当前文件（但保留在 files Map 中以支持断点续传）
     if (this.currentFile) {
       console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filename}`);
-      // 不删除 currentFile，以便断点续传
+      this.currentFile.cleanup();
       this.currentFile = null;
     }
     

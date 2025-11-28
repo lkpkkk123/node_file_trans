@@ -11,7 +11,7 @@ const CONFIG = {
 };
 
 class FileUploadClient {
-  constructor(host, port) {
+  constructor(host, port, enableResume = false, isTestMode = false) {
     this.host = host;
     this.port = port;
     this.socket = null;
@@ -19,6 +19,10 @@ class FileUploadClient {
     this.currentFile = null;
     this.isWaitingAck = false;
     this.startPos = 0;
+    this.enableResume = enableResume;
+    this.lastMd5 = null;
+    this.isTestMode = isTestMode;
+    this.uploadComplete = null; // Promise resolver for test mode
   }
 
   // 连接到服务器
@@ -93,7 +97,28 @@ class FileUploadClient {
       
     } else if (response.type === 'finish') {
       console.log('✓ 服务器确认:', response.message);
-      this.disconnect();
+      if (response.server_md5) {
+        const expected = (this.currentFile && this.currentFile.md5) || this.lastMd5;
+        console.log(`服务器 MD5: ${response.server_md5}`);
+        if (expected) {
+          console.log(`本地 MD5: ${expected}`);
+          const matches = typeof response.match === 'boolean' ? response.match : response.server_md5 === expected;
+          if (matches) {
+            console.log('✓ MD5 校验通过');
+          } else {
+            console.error('✗ MD5 校验失败，文件可能损坏');
+          }
+        }
+      } else {
+        console.log('服务器未返回 MD5 校验结果');
+      }
+      
+      // 测试模式下不断开连接，通知上传完成
+      if (this.isTestMode && this.uploadComplete) {
+        this.uploadComplete();
+      } else {
+        this.disconnect();
+      }
       
     } else if (response.type === 'error') {
       console.error('✗ 服务器错误:', response.message);
@@ -127,6 +152,7 @@ class FileUploadClient {
     console.log(`文件: ${filename}`);
     console.log(`大小: ${this.formatSize(stats.size)}`);
     console.log(`路径: ${filePath}`);
+    console.log(`断点续传: ${this.enableResume ? '开启' : '关闭'}`);
     
     // 计算 MD5
     console.log('\n计算 MD5...');
@@ -138,15 +164,18 @@ class FileUploadClient {
       type: 'file',
       filename: filename,
       size: stats.size,
-      id: md5
+      id: md5,
+      resume: this.enableResume
     };
     
     this.currentFile = {
       path: filePath,
       size: stats.size,
       sent: 0,
-      stream: null
+      stream: null,
+      md5
     };
+    this.lastMd5 = md5;
     
     // 发送元数据
     console.log('\n发送文件元数据...');
@@ -242,7 +271,9 @@ class FileUploadClient {
 
   onClose() {
     console.log('\n连接已关闭');
-    process.exit(0);
+    if (!this.isTestMode) {
+      process.exit(0);
+    }
   }
 }
 
@@ -250,30 +281,90 @@ class FileUploadClient {
 async function main() {
   // 解析命令行参数
   const args = process.argv.slice(2);
+  let resumeEnabled = false;
+  const resumeFlagIndex = args.indexOf('--resume');
+  const isTest = args.indexOf('--test');
+
+  if (resumeFlagIndex !== -1) {
+    resumeEnabled = true;
+    args.splice(resumeFlagIndex, 1);
+  }
   
   if (args.length === 0) {
     console.log('用法: node tcp-client.js <文件路径> [服务器地址] [端口]');
     console.log('\n示例:');
     console.log('  node tcp-client.js ./test.txt');
     console.log('  node tcp-client.js ./test.txt 192.168.1.100');
-    console.log('  node tcp-client.js ./test.txt 192.168.1.100 3000');
+    console.log('  node tcp-client.js ./test.txt 192.168.1.100 3000 --resume');
     console.log('\n参数说明:');
     console.log('  <文件路径>   - 要上传的文件路径（必需）');
     console.log('  [服务器地址] - 服务器 IP 地址（可选，默认: 127.0.0.1）');
     console.log('  [端口]       - 服务器端口（可选，默认: 3000）');
+    console.log('  [--resume]   - 开启断点续传（可选，默认关闭）');
     process.exit(1);
   }
 
   const filePath = args[0];
   const host = args[1] || CONFIG.HOST;
   const port = parseInt(args[2]) || CONFIG.PORT;
-
+  
+  // 测试模式：循环上传文件列表
+  if (isTest !== -1) {
+    args.splice(isTest, 1);
+    
+    const fileList = [
+      '/home/likp/Downloads/SaperaLTSDKWow64Setup-9.00.zip',
+      '/home/likp/Downloads/SDL2-2.24.0.zip',
+      '/home/likp/Downloads/rec_20251021154452_20251021163600_64.mp4',
+      '/home/likp/Downloads/NVIDIA-Linux-x86_64-550.135.run'
+    ];
+    
+    console.log('='.repeat(50));
+    console.log('TCP 文件上传客户端 - 测试模式');
+    console.log('='.repeat(50));
+    console.log(`文件列表: ${fileList.length} 个文件`);
+    console.log('按 Ctrl+C 停止测试\n');
+    
+    let client = new FileUploadClient(host, port, resumeEnabled, true);
+    await client.connect();
+    
+    let uploadCount = 0;
+    while (true) {
+      for (const testFilePath of fileList) {
+        try {
+          console.log(`\n[测试 #${++uploadCount}] 开始上传: ${path.basename(testFilePath)}`);
+          
+          // 创建 Promise 等待上传完成
+          const uploadPromise = new Promise(resolve => {
+            client.uploadComplete = resolve;
+          });
+          
+          await client.uploadFile(testFilePath);
+          await uploadPromise;
+          
+          console.log(`[测试 #${uploadCount}] 完成\n`);
+          
+          // 短暂延迟避免过快
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+        } catch (err) {
+          console.error(`\n✗ 测试错误 (#${uploadCount}):`, err.message);
+          console.log('重新连接...');
+          client = new FileUploadClient(host, port, resumeEnabled, true);
+          await client.connect();
+        }
+      }
+    }
+    return; // 测试模式不执行下面的单次上传
+  }
+  
+  // 普通模式：单次上传
   console.log('='.repeat(50));
   console.log('TCP 文件上传客户端');
   console.log('='.repeat(50));
 
   try {
-    const client = new FileUploadClient(host, port);
+    const client = new FileUploadClient(host, port, resumeEnabled, false);
     await client.connect();
     await client.uploadFile(filePath);
   } catch (err) {
@@ -284,3 +375,5 @@ async function main() {
 
 // 运行
 main();
+//让进程不要退出
+

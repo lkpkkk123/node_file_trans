@@ -19,6 +19,13 @@
         "<node_internals>/**"
       ],
       "program": "${workspaceFolder}/tcp-client.js",
+      //传递参数
+      "args": [
+        "/home/likp/Downloads/SaperaLTSDKWow64Setup-9.00.zip",
+        "127.0.0.1",
+        "3000",
+        "--test"
+      ],
       "console": "integratedTerminal"
     },
     {
