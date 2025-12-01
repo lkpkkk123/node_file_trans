@@ -139,14 +139,15 @@ class myFile {
     }
     if (!isOpenSuccess) {
       this.hasError = true;
-      this.session.notifyError('无法打开文件: ' + filePath);
+      if (this.session)
+      {
+        this.session.notifyError('无法打开文件: ' + filePath);
+      }
       if (this.allowResume){
         files.delete(this.id);
       }
-      throw new Error(`无法打开文件: ${filePath}`);
     }
-  
-    return true;
+    return isOpenSuccess;
   }
   
   // 设置事件监听器
