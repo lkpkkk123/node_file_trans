@@ -7,27 +7,52 @@ const crypto = require('crypto');
 const CONFIG = {
   PORT: 3000,
   HOST: '0.0.0.0',
-  UPLOAD_PATH: '/home/likp/test_uploads',
+  //UPLOAD_PATH: '/home/likp/test_uploads',
+  UPLOAD_PATH_MAP: new Map(
+    [['.','/home/likp/test_uploads'],//virtual path,real path .是根目录，必须有一个根目录
+      ['uploads','/home/likp/test_uploads2']]),
   MAX_CONNECTIONS: 500,
   MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
 };
 
+function mapToRealPath(clientFileName)
+{
+  const baseName = path.basename(clientFileName);
+  const dirName = path.dirname(clientFileName);
+  const firstLevelDir = dirName.split(path.sep)[0] || '.';
+  if (firstLevelDir === '.') {
+    clientFileName = '.' + path.sep + clientFileName;
+  }
+  if(CONFIG.UPLOAD_PATH_MAP.has(firstLevelDir)){
+    let realPath = CONFIG.UPLOAD_PATH_MAP.get(firstLevelDir);
+    const endPath=clientFileName.replace(firstLevelDir,realPath);
+    return endPath;
+  }
+  else{
+    const endPath = CONFIG.UPLOAD_PATH_MAP.get('.')+path.sep+clientFileName;
+    return endPath;
+  }
+}
+
 const clients = new Map();
 const files = new Map();
 
 // 确保上传目录存在
 function ensureUploadDir() {
-  if (!fs.existsSync(CONFIG.UPLOAD_PATH)) {
-    try {
-      fs.mkdirSync(CONFIG.UPLOAD_PATH, { recursive: true });
-      console.log(`[系统] 创建上传目录: ${CONFIG.UPLOAD_PATH}`);
-    } catch (err) {
-      console.error(`[系统错误] 无法创建上传目录: ${err.message}`);
-      process.exit(1);
+
+  CONFIG.UPLOAD_PATH_MAP.forEach((realPath,virtualPath) => {
+    if (!fs.existsSync(realPath)) {
+      try {
+        fs.mkdirSync(realPath, { recursive: true });
+        console.log(`[系统] 创建上传目录: ${realPath} (虚拟路径: ${virtualPath})`);
+      } catch (err) {
+        console.error(`[系统错误] 无法创建上传目录: ${err.message}`);
+        process.exit(1);
+      }
     }
-  }
+  });
 }
 
 // 安全的文件名检查
@@ -39,9 +64,8 @@ function sanitizeFilename(filename) {
 }
 
 class myFile {
-  constructor(id, filename, size, session, md5sum,allowResume = false) {
+  constructor(id, filePath, size, session, md5sum,allowResume = false) {
     this.id = id;
-    this.filename = sanitizeFilename(filename);
     this.size = size;
     this.writtenSize = 0;
     this.hasError = false;
@@ -49,7 +73,7 @@ class myFile {
     this.stream = null;
     this.session = session; // 关联的会话对象
     this.awaitDrain = false;
-    this.filePath = path.join(CONFIG.UPLOAD_PATH, this.filename);
+    this.filePath = filePath;
     this.allowResume = allowResume;
     this.CHECK_MD5 = md5sum; // 是否在完成后校验 MD5
     
@@ -59,42 +83,70 @@ class myFile {
     }
   }
   
-  Open(startPos, fileName) {
-    // 关闭现有流
-    if (this.stream && !this.isClosed) {
-      this.removeListeners();
-      this.stream.end();
-    }
-    
-    const safeFilename = sanitizeFilename(fileName);
-    if (safeFilename !== this.filename) {
-      this.filename = safeFilename;
-      this.filePath = path.join(CONFIG.UPLOAD_PATH, this.filename);
-    }
-    const filePath = this.filePath;
-    
-    // 重新创建写入流
-    try {
+  async CreateFile(startPos, filePath)
+  {
+    return new Promise((resolve, reject) => {
+      // 关闭现有流
+      if (this.stream && !this.isClosed) {
+        this.removeListeners();
+        this.stream.end();
+      }
+
       if (startPos > 0) {
         this.stream = fs.createWriteStream(filePath, {
           highWaterMark: 2 * 1024 * 1024, // 2MB 缓冲区
-          flags: 'r+', 
-          start: startPos 
+          flags: 'r+',
+          start: startPos
         });
       } else {
         this.stream = fs.createWriteStream(filePath, {
           highWaterMark: 2 * 1024 * 1024, // 2MB 缓冲区
         });
       }
-      
-      this.setupListeners();
-      return true;
-      
-    } catch (err) {
-      console.error(`[文件] 打开文件失败: ${err.message}`);
-      this.hasError = true;
-      return false;
+
+      this.stream.on('error', (err) => {
+        console.error(`[文件错误] ${this.filePath}: ${err.message}`);
+        //this.hasError = true;
+        this.cleanup();
+        reject(err);
+      });
+      this.stream.on('open', (fd) => {
+        console.log(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
+        //this.isClosed = false;
+        resolve(true);
+      });
+    });
+  }
+  async Open(startPos, filePath) {
+    // 关闭现有流
+    let isOpenSuccess = false;
+    for (let i = 0; i < 2; i++) {
+      try {
+        await this.CreateFile(startPos, filePath);
+        isOpenSuccess = true;
+        this.isClosed = false;
+        this.filePath = filePath;
+        this.setupListeners();
+        break;
+      } catch (err) {
+        if (i == 0)
+        {
+          let dirName = path.dirname(filePath);
+          fs.mkdirSync(dirName, { recursive: true });
+        }
+
+      }
     }
+    if (!isOpenSuccess) {
+      this.hasError = true;
+      this.session.notifyError('无法打开文件: ' + filePath);
+      if (this.allowResume){
+        files.delete(this.id);
+      }
+      throw new Error(`无法打开文件: ${filePath}`);
+    }
+  
+    return true;
   }
   
   // 设置事件监听器
@@ -102,7 +154,7 @@ class myFile {
     if (!this.stream) return;
     
     this.stream.on('open', (fd) => {
-      console.log(`[文件] ${this.filename} 成功打开，文件描述符: ${fd}`);
+      console.log(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
       this.isClosed = false;
     });
 
@@ -114,7 +166,7 @@ class myFile {
     });
 
     this.stream.on('error', (err) => {
-      console.error(`[文件错误] ${this.filename}: ${err.message}`);
+      console.error(`[文件错误] ${this.filePath}: ${err.message}`);
       this.hasError = true;
       this.cleanup();
       
@@ -130,11 +182,11 @@ class myFile {
     });
 
     this.stream.on('finish', () => {
-      console.log(`[文件] ${this.filename} 写入完成`);
+      console.log(`[文件] ${this.filePath} 写入完成`);
     });
 
     this.stream.on('close', () => {
-      console.log(`[文件] ${this.filename} 流已关闭`);
+      console.log(`[文件] ${this.filePath} 流已关闭`);
       this.isClosed = true;
     });
   }
@@ -147,17 +199,17 @@ class myFile {
 
   write(data) {
     if (this.hasError) {
-      console.error(`[文件] ${this.filename} 已发生错误，拒绝写入`);
+      console.error(`[文件] ${this.filePath} 已发生错误，拒绝写入`);
       return false;
     }
 
     if (this.isClosed) {
-      console.error(`[文件] ${this.filename} 已关闭，拒绝写入`);
+      console.error(`[文件] ${this.filePath} 已关闭，拒绝写入`);
       return false;
     }
 
     if (!this.stream) {
-      console.error(`[文件] ${this.filename} 流不存在`);
+      console.error(`[文件] ${this.filePath} 流不存在`);
       return false;
     }
 
@@ -190,7 +242,7 @@ class myFile {
 
       this.stream.end(() => {
         clearTimeout(timeout);
-        console.log(`[文件] ${this.filename} 已关闭`);
+        console.log(`[文件] ${this.filePath} 已关闭`);
         resolve();
       });
 
@@ -211,9 +263,9 @@ class myFile {
         } else {
           this.stream.destroy();
         }
-        console.log(`[文件] ${this.filename} 流已关闭`);
+        console.log(`[文件] ${this.filePath} 流已关闭`);
       } catch (err) {
-        console.error(`[文件] ${this.filename} 关闭流时出错: ${err.message}`);
+        console.error(`[文件] ${this.filePath} 关闭流时出错: ${err.message}`);
         try {
           this.stream.destroy();
         } catch (e) {
@@ -383,10 +435,30 @@ class mySession {
     }
   }
 
+  mapToRealPath(clientFileName)
+  {
+    const baseName = path.basename(clientFileName);
+    const dirName = path.dirname(clientFileName);
+    const firstLevelDir = dirName.split(path.sep)[0];
+    let realPath = null;
+    // if(CONFIG.UPLOAD_PATH_MAP.has(firstLevelDir)){
+    //   realPath = CONFIG.UPLOAD_PATH_MAP.get(dirName);
+    //   uploadDir = realPath;
+    // }else{
+    //   console.error(`[错误] 虚拟路径 ${dirName} 未映射`);
+    //   this.notifyError(`虚拟路径 ${dirName} 未映射`);
+    //   setTimeout(() => {
+    //     this.socket.end();
+    //   }, 100);
+    //   return;
+    // }
+  }
   handleJsonMessage(msg) {
     if (msg.type === 'file') {
       console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, ID: ${msg.id}`);
-      
+      //将msg.filename分割成路径和文件名
+      //let fPath = sanitizeFilename(msg.filename);
+      let fPath = mapToRealPath(msg.filename);
       try {
         const allowResume = Boolean(msg.resume);
         let file;
@@ -395,21 +467,21 @@ class mySession {
         // 检查是否断点续传
         if (allowResume && files.has(msg.id)) {
           file = files.get(msg.id);
-          if (file && file.allowResume && file.size > file.writtenSize &&  file.filename === sanitizeFilename(msg.filename)) {
+          if (file && file.allowResume && file.size > file.writtenSize &&  file.filePath === fPath) {
             startPos = file.writtenSize;
-            file.Open(startPos, msg.filename);
-            console.log(`[断点续传] ${msg.filename} 从 ${startPos} 继续`);
+            file.Open(startPos, fPath);
+            console.log(`[断点续传] ${fPath} 从 ${startPos} 继续`);
           } else {
             console.log('[警告] 文件名不匹配或不可续传，创建新文件');
-            file = new myFile(msg.id, msg.filename, msg.size, this, msg.id !== '', allowResume);
-            file.Open(0, msg.filename);
+            file = new myFile(msg.id, fPath, msg.size, this, msg.id !== '', allowResume);
+            file.Open(0, fPath);
             if (file.allowResume) {
               files.set(msg.id, file);
             }
           }
         } else {
-          file = new myFile(msg.id, msg.filename, msg.size, this,msg.id !== '', allowResume);
-          file.Open(0, msg.filename);
+          file = new myFile(msg.id, fPath, msg.size, this,msg.id !== '', allowResume);
+          file.Open(0, fPath);
           if (file.allowResume) {
             files.set(msg.id, file);
           }
@@ -466,7 +538,7 @@ class mySession {
     }
     
     if (this.currentFile.isComplete()) {
-      console.log(`[完成] ${this.address} 文件: ${this.currentFile.filename}`);
+      console.log(`[完成] ${this.address} 文件: ${this.currentFile.filePath}`);
       const finishedFile = this.currentFile;
       this.currentFile = null;
       this.isFirstMessage = true;
@@ -486,7 +558,7 @@ class mySession {
       if (file.CHECK_MD5) {
         serverMd5 = await file.computeMD5();
         checksumMatch = serverMd5 === file.id;
-        console.log(`[校验] ${file.filename} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.id}`}`);
+        console.log(`[校验] ${file.filePath} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.id}`}`);
       }
 
       const resp = {
@@ -498,7 +570,7 @@ class mySession {
       };
       this.send(JSON.stringify(resp) + '\0');
     } catch (err) {
-      console.error(`[校验错误] ${file.filename}: ${err.message}`);
+      console.error(`[校验错误] ${file.filePath}: ${err.message}`);
       this.notifyError('服务器校验失败: ' + err.message);
     } finally {
       if (file.allowResume) {
@@ -530,7 +602,7 @@ class mySession {
     
     // 关闭当前文件
     if (this.currentFile) {
-      console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filename}`);
+      console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filePath}`);
       
       // 如果不是断点续传模式，从 files Map 中移除
       if (!this.currentFile.allowResume && files.has(this.currentFile.id)) {
@@ -556,7 +628,7 @@ class mySession {
       connectTime: this.connectTime,
       messageCount: this.messageCount,
       bufferSize: this.buffer.length,
-      currentFile: this.currentFile ? this.currentFile.filename : null
+      currentFile: this.currentFile ? this.currentFile.filePath : null
     };
   }
 }
@@ -591,7 +663,11 @@ function startServer() {
     console.log('='.repeat(50));
     console.log('TCP 文件传输服务器已启动');
     console.log(`地址: ${CONFIG.HOST}:${CONFIG.PORT}`);
-    console.log(`上传目录: ${CONFIG.UPLOAD_PATH}`);
+    let upLoadDirs = '';
+    CONFIG.UPLOAD_PATH_MAP.forEach((realPath,virtualPath) => {
+      upLoadDirs += `${virtualPath} -> ${realPath}\n`;
+    });
+    console.log(`上传目录: \n${upLoadDirs}`);
     console.log(`最大连接数: ${CONFIG.MAX_CONNECTIONS}`);
     console.log(`最大文件大小: ${(CONFIG.MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`);
     console.log('='.repeat(50));
@@ -630,6 +706,8 @@ process.on('SIGINT', () => {
     process.exit(1);
   }, 5000);
 });
+
+
 
 // 启动
 startServer();

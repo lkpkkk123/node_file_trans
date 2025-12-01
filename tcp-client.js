@@ -137,7 +137,7 @@ class FileUploadClient {
   }
 
   // 上传文件
-  async uploadFile(filePath, useMd5 = false) {
+  async uploadFile(filePath,serverDir, useMd5 = false) {//serverDir不能带/
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
       throw new Error(`文件不存在: ${filePath}`);
@@ -148,7 +148,8 @@ class FileUploadClient {
 
 
     const stats = fs.statSync(filePath);
-    const filename = path.basename(filePath);
+    const filename = serverDir + path.sep + path.basename(filePath);
+    
     
     console.log('\n=== 文件上传 ===');
     console.log(`文件: ${filename}`);
@@ -174,7 +175,7 @@ class FileUploadClient {
     };
     
     this.currentFile = {
-      path: filePath,
+      path: filename,
       size: stats.size,
       sent: 0,
       stream: null,
@@ -187,6 +188,7 @@ class FileUploadClient {
     const jsonString = JSON.stringify(metadata);
     this.socket.write(jsonString + '\0');
     this.isWaitingAck = true;
+    this.currentFile.path = filePath;
   }
 
   // 发送文件数据
@@ -300,6 +302,12 @@ async function main() {
     console.log('MD5 校验启用');
     args.splice(args.indexOf('--md5sum'), 1);
   }
+  let serverDir = '.';
+  if (args.indexOf('--dir') !== -1) {
+    serverDir = args[args.indexOf('--dir') + 1];
+    console.log(`服务器目录设置为: ${serverDir}`);
+    args.splice(args.indexOf('--dir'), 2);
+  }
   
   if (args.length === 0) {
     console.log('用法: node tcp-client.js <文件路径> [服务器地址] [端口]');
@@ -338,7 +346,7 @@ async function main() {
     
     let client = new FileUploadClient(host, port, resumeEnabled, true);
     await client.connect();
-    
+
     let uploadCount = 0;
     while (true) {
       for (const testFilePath of fileList) {
@@ -350,7 +358,7 @@ async function main() {
             client.uploadComplete = resolve;
           });
           
-          await client.uploadFile(testFilePath, md5SumEnabled);
+          await client.uploadFile(testFilePath,serverDir, md5SumEnabled);
           await uploadPromise;
           
           console.log(`[测试 #${uploadCount}] 完成\n`);
@@ -377,7 +385,7 @@ async function main() {
   try {
     const client = new FileUploadClient(host, port, resumeEnabled, false);
     await client.connect();
-    await client.uploadFile(filePath, md5SumEnabled);
+    await client.uploadFile(filePath,serverDir, md5SumEnabled);
   } catch (err) {
     console.error('\n✗ 错误:', err.message);
     process.exit(1);

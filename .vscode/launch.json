@@ -25,7 +25,9 @@
         "127.0.0.1",
         "3000",
         "--resume",
-        "--md5sum"
+        "--md5sum",
+        "--dir",
+        "uploads",
       ],
       "console": "integratedTerminal"
     },
