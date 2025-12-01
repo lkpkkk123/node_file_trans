@@ -8,7 +8,7 @@ const CONFIG = {
   PORT: 3000,
   HOST: '0.0.0.0',
   UPLOAD_PATH: '/home/likp/test_uploads',
-  MAX_CONNECTIONS: 100,
+  MAX_CONNECTIONS: 500,
   MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟

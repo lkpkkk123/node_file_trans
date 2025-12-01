@@ -142,6 +142,10 @@ class FileUploadClient {
     if (!fs.existsSync(filePath)) {
       throw new Error(`文件不存在: ${filePath}`);
     }
+    if (fs.statSync(filePath).size === 0) {
+      throw new Error(`文件为空: ${filePath}`);
+    }
+
 
     const stats = fs.statSync(filePath);
     const filename = path.basename(filePath);
