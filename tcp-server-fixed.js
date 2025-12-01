@@ -12,10 +12,6 @@ const CONFIG = {
   MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
-  MAX_QUEUE_SIZE: 128 * 1024 * 1024, // 128MB 排队缓冲
-  RESUME_QUEUE_THRESHOLD: 8 * 1024 * 1024, // 队列 < 8MB 恢复接收
-  FILE_WRITE_CHUNK: 512 * 1024, // 每次向磁盘写 512KB
-  CHECK_MD5: true // 是否在完成后校验 MD5
 };
 
 const clients = new Map();
@@ -43,12 +39,11 @@ function sanitizeFilename(filename) {
 }
 
 class myFile {
-  constructor(id, filename, size, session, allowResume = false) {
+  constructor(id, filename, size, session, md5sum,allowResume = false) {
     this.id = id;
     this.filename = sanitizeFilename(filename);
     this.size = size;
     this.writtenSize = 0;
-    this.writeQueue = Buffer.alloc(0);
     this.hasError = false;
     this.isClosed = false;
     this.stream = null;
@@ -56,6 +51,7 @@ class myFile {
     this.awaitDrain = false;
     this.filePath = path.join(CONFIG.UPLOAD_PATH, this.filename);
     this.allowResume = allowResume;
+    this.CHECK_MD5 = md5sum; // 是否在完成后校验 MD5
     
     // 验证文件大小
     if (size > CONFIG.MAX_FILE_SIZE) {
@@ -107,13 +103,13 @@ class myFile {
     
     this.stream.on('open', (fd) => {
       console.log(`[文件] ${this.filename} 成功打开，文件描述符: ${fd}`);
+      this.isClosed = false;
     });
 
     this.stream.on('drain', () => {
       this.awaitDrain = false;
-      this.processQueue();
-      if (this.writeQueue.length === 0 && this.session) {
-        this.session.resumeReceiving();
+      if(this.session) {
+        this.session.resumeReceiving('file-stream-backpressure');
       }
     });
 
@@ -165,11 +161,6 @@ class myFile {
       return false;
     }
 
-    // 如果存在积压，先排队
-    if (this.awaitDrain || this.writeQueue.length > 0) {
-      return this.enqueueData(data);
-    }
-
     const canWrite = this.stream.write(data);
     this.writtenSize += data.length;
 
@@ -178,46 +169,6 @@ class myFile {
       if (this.session) {
         this.session.pauseReceiving('file-stream-backpressure');
       }
-    }
-    return true;
-  }
-
-  enqueueData(data) {
-    this.writeQueue = Buffer.concat([this.writeQueue, data], this.writeQueue.length + data.length);
-
-    if (this.writeQueue.length > CONFIG.MAX_QUEUE_SIZE) {
-      console.error(`[文件] ${this.filename} 队列过长(${this.writeQueue.length} bytes)，拒绝写入`);
-      return false;
-    }
-
-    if (this.session && this.writeQueue.length > CONFIG.RESUME_QUEUE_THRESHOLD) {
-      this.session.pauseReceiving('disk-queue');
-    }
-
-    return this.processQueue();
-  }
-
-  processQueue() {
-    while (this.writeQueue.length > 0 && !this.awaitDrain) {
-      const chunkSize = Math.min(CONFIG.FILE_WRITE_CHUNK, this.writeQueue.length);
-      const data = this.writeQueue.slice(0, chunkSize);
-      const canWrite = this.stream.write(data);
-
-      if (!canWrite) {
-        console.log(`[文件] ${this.filename} 队列写入触发 drain，暂停继续`);
-        this.awaitDrain = true;
-        if (this.session) {
-          this.session.pauseReceiving('file-stream-backpressure');
-        }
-        return false;
-      }
-
-      this.writtenSize += data.length;
-      this.writeQueue = this.writeQueue.slice(chunkSize);
-    }
-
-    if (this.writeQueue.length < CONFIG.RESUME_QUEUE_THRESHOLD && !this.awaitDrain && this.session) {
-      this.session.resumeReceiving();
     }
     return true;
   }
@@ -254,14 +205,23 @@ class myFile {
     if (this.stream && !this.isClosed) {
       try {
         this.removeListeners();
-        this.stream.destroy();
-        console.log(`[文件] ${this.filename} 流已销毁`);
+        // 先尝试优雅关闭，如果失败再强制销毁
+        if (this.stream.writable) {
+          this.stream.end();
+        } else {
+          this.stream.destroy();
+        }
+        console.log(`[文件] ${this.filename} 流已关闭`);
       } catch (err) {
-        console.error(`[文件] ${this.filename} 销毁流时出错: ${err.message}`);
+        console.error(`[文件] ${this.filename} 关闭流时出错: ${err.message}`);
+        try {
+          this.stream.destroy();
+        } catch (e) {
+          // 忽略 destroy 错误
+        }
       }
     }
     
-    this.writeQueue = Buffer.alloc(0);
     this.awaitDrain = false;
     this.isClosed = true;
   }
@@ -441,14 +401,14 @@ class mySession {
             console.log(`[断点续传] ${msg.filename} 从 ${startPos} 继续`);
           } else {
             console.log('[警告] 文件名不匹配或不可续传，创建新文件');
-            file = new myFile(msg.id, msg.filename, msg.size, this, allowResume);
+            file = new myFile(msg.id, msg.filename, msg.size, this, msg.id !== '', allowResume);
             file.Open(0, msg.filename);
             if (file.allowResume) {
               files.set(msg.id, file);
             }
           }
         } else {
-          file = new myFile(msg.id, msg.filename, msg.size, this, allowResume);
+          file = new myFile(msg.id, msg.filename, msg.size, this,msg.id !== '', allowResume);
           file.Open(0, msg.filename);
           if (file.allowResume) {
             files.set(msg.id, file);
@@ -521,9 +481,9 @@ class mySession {
     try {
       await file.close();
 
-      let serverMd5 = null;
-      let checksumMatch = null;
-      if (CONFIG.CHECK_MD5) {
+      let serverMd5 = '';
+      let checksumMatch = true;
+      if (file.CHECK_MD5) {
         serverMd5 = await file.computeMD5();
         checksumMatch = serverMd5 === file.id;
         console.log(`[校验] ${file.filename} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.id}`}`);
@@ -532,7 +492,7 @@ class mySession {
       const resp = {
         type: 'finish',
         message: '文件传输完成',
-        server_md5: serverMd5,
+        server_md5: file.CHECK_MD5 ? serverMd5 : null,
         expected_md5: file.id,
         match: checksumMatch
       };
@@ -548,8 +508,13 @@ class mySession {
   }
 
   onError(err) {
-    console.error(`[错误] ${this.address}: ${err.message}`);
-    this.cleanup();
+    // 忽略常见的客户端断开错误
+    if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+      console.log(`[断开] ${this.address} 连接重置`);
+    } else {
+      console.error(`[错误] ${this.address}: ${err.message}`);
+    }
+    // onClose 会自动调用，不需要重复 cleanup
   }
 
   onClose() {
@@ -563,9 +528,16 @@ class mySession {
       this.timeout = null;
     }
     
-    // 关闭当前文件（但保留在 files Map 中以支持断点续传）
+    // 关闭当前文件
     if (this.currentFile) {
       console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filename}`);
+      
+      // 如果不是断点续传模式，从 files Map 中移除
+      if (!this.currentFile.allowResume && files.has(this.currentFile.id)) {
+        files.delete(this.currentFile.id);
+        console.log(`[清理] 从 files Map 移除: ${this.currentFile.id}`);
+      }
+      
       this.currentFile.cleanup();
       this.currentFile = null;
     }

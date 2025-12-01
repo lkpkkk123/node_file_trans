@@ -109,8 +109,6 @@ class FileUploadClient {
             console.error('✗ MD5 校验失败，文件可能损坏');
           }
         }
-      } else {
-        console.log('服务器未返回 MD5 校验结果');
       }
       
       // 测试模式下不断开连接，通知上传完成
@@ -139,7 +137,7 @@ class FileUploadClient {
   }
 
   // 上传文件
-  async uploadFile(filePath) {
+  async uploadFile(filePath, useMd5 = false) {
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
       throw new Error(`文件不存在: ${filePath}`);
@@ -155,9 +153,12 @@ class FileUploadClient {
     console.log(`断点续传: ${this.enableResume ? '开启' : '关闭'}`);
     
     // 计算 MD5
-    console.log('\n计算 MD5...');
-    const md5 = await this.calculateMD5(filePath);
-    console.log(`MD5: ${md5}`);
+    let md5 = '';
+    if(useMd5) {
+      console.log('\n计算 MD5...');
+      md5 = await this.calculateMD5(filePath);
+      console.log(`MD5: ${md5}`);
+    }
     
     // 构建文件元数据消息
     const metadata = {
@@ -289,6 +290,12 @@ async function main() {
     resumeEnabled = true;
     args.splice(resumeFlagIndex, 1);
   }
+  let md5SumEnabled = false;
+  if (args.indexOf('--md5sum') !== -1) {
+    md5SumEnabled = true;
+    console.log('MD5 校验启用');
+    args.splice(args.indexOf('--md5sum'), 1);
+  }
   
   if (args.length === 0) {
     console.log('用法: node tcp-client.js <文件路径> [服务器地址] [端口]');
@@ -339,7 +346,7 @@ async function main() {
             client.uploadComplete = resolve;
           });
           
-          await client.uploadFile(testFilePath);
+          await client.uploadFile(testFilePath, md5SumEnabled);
           await uploadPromise;
           
           console.log(`[测试 #${uploadCount}] 完成\n`);
@@ -366,7 +373,7 @@ async function main() {
   try {
     const client = new FileUploadClient(host, port, resumeEnabled, false);
     await client.connect();
-    await client.uploadFile(filePath);
+    await client.uploadFile(filePath, md5SumEnabled);
   } catch (err) {
     console.error('\n✗ 错误:', err.message);
     process.exit(1);
