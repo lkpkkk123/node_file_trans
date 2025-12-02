@@ -9,14 +9,17 @@ const CONFIG = {
   SERVER_HOST: process.argv[3] || '127.0.0.1',
   SERVER_PORT: parseInt(process.argv[4]) || 3000,
   ENABLE_RESUME: true,
-  ENABLE_MD5: true,
+  ENABLE_MD5: false,
   VIRTUAL_DIR: 'uploads',  // 上传到服务器的虚拟目录
   SYNC_INTERVAL: 5000,  // 文件关闭后等待5秒再上传（确保写入完成）
+  SYNC_DELETE_FILE: true,  // 同步删除的文件
+  DELETE_ON_SUCCESS: false  // 上传成功后删除本地文件
 };
 
 // 正在上传的文件集合
 //const uploadingFiles = new Set();
 const pendingUploads = new Set();  // 延迟上传队列
+const pendingDeletes = new Set();  // 删除队列上传队列
 
 console.log('='.repeat(60));
 console.log('文件监听自动上传服务');
@@ -131,10 +134,35 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       pendingUploads.clear();
       
       for (const filePath of filesToUpload) {
-        await uploadFile(filePath);
+        let succ=await uploadFile(filePath);
+        if (succ && CONFIG.DELETE_ON_SUCCESS) {
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              console.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
+            } else {
+              console.log(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
+            }
+          });
+        }
       }
     }
-    
+
+    if( pendingDeletes.size > 0) {
+      const filesToDelete = Array.from(pendingDeletes);
+      pendingDeletes.clear();
+
+      if(!client.isConnected()) {
+        console.log('重新连接服务器...');
+        await client.connect();
+      }
+      for (const filePath of filesToDelete) {
+        console.log(`[请求服务器删除] ${path.basename(filePath)}`);
+        let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
+        relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
+        client.delFile(relativePath);
+      }
+    }
+
     // 等待1秒后再次检查队列
     setTimeout(processUploadQueue, CONFIG.SYNC_INTERVAL);
   }
@@ -159,8 +187,15 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
 
   //监听删除事件
   watcher.on('unlink', (filePath) => {
+    if (CONFIG.DELETE_ON_SUCCESS)// 如果是上传成功后删除本地文件，则忽略删除事件
+      return;
+
+    if(!CONFIG.SYNC_DELETE_FILE)
+      return;
+
     const fileName = path.basename(filePath);
     console.log(`[删除] ${fileName} - 文件已被删除`);
+    pendingDeletes.add(filePath);
   });
 
   // 监听错误

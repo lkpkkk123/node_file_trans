@@ -131,6 +131,8 @@ class FileUploadClient {
       if (this.uploadFailed) {
         this.uploadFailed(new Error(response.message));        
       }
+    } else if (response.type === 'del_file_ack') {
+      console.log(response.message);
     }
   }
 
@@ -145,7 +147,15 @@ class FileUploadClient {
       stream.on('error', reject);
     });
   }
-
+  // 上传文件
+  delFile(serverPath) {
+    const metadata = {
+      type: 'del_file',
+      filename: serverPath
+    };
+    const jsonString = JSON.stringify(metadata);
+    this.socket.write(jsonString + '\0');
+  }
   // 上传文件
   async uploadFile(filePath,serverPath, useMd5 = false) {//serverDir不能带/
     // 检查文件是否存在

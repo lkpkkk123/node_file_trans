@@ -16,6 +16,7 @@ const CONFIG = {
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
   RESUME_TIMEOUT: 2 * 60 * 60 * 1000, // 2小时
+  DELETE_EMPTY_DIR: true, // 收到删除文件时，检查删除空目录
 };
 function GetTickCount() {
   return Math.floor(os.uptime() * 1000);
@@ -434,7 +435,6 @@ class mySession {
       this.handleJsonMessage(this.jsonMessage);
       
       this.buffer = this.buffer.slice(nullIndex + 1);
-      this.isFirstMessage = false;
       
       if (this.buffer.length > 0) {
         this.processBinaryData();
@@ -477,6 +477,8 @@ class mySession {
       console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, md5: ${msg.md5sum}`);
       //将msg.filename分割成路径和文件名
       //let fPath = sanitizeFilename(msg.filename);
+      this.isFirstMessage = false;
+
       let fPath = mapToRealPath(msg.filename);
       try {
         const allowResume = Boolean(msg.resume);
@@ -530,6 +532,36 @@ class mySession {
       console.log(`[文本] ${msg.content}`);
       this.send(`收到: ${msg.content}\n`);
       
+    } else if (msg.type === 'del_file') { 
+      console.log(`[删除] 请求删除文件: ${msg.filename}`);
+      let fPath = mapToRealPath(msg.filename);
+      fs.unlink(fPath, (err) => {
+        if (err) {
+          const resp = {
+            type: 'del_file_ack',
+            message: `文件已删除失败: ${msg.filename}`
+          };
+          this.send(JSON.stringify(resp) + '\0');
+        } else {
+          console.log(`[删除] 文件已删除: ${fPath}`);
+          const resp = {
+            type: 'del_file_ack',
+            message: `文件已删除: ${msg.filename}`
+          };
+          this.send(JSON.stringify(resp) + '\0');
+        }
+
+        if (CONFIG.DELETE_EMPTY_DIR) {
+          let dir=path.dirname(fPath);
+          //尝试删除空目录
+          fs.rmdir(dir, { recursive: false }, (err) => {
+            if (!err) {
+              console.log(`[删除] 目录已删除: ${dir}`);
+            }
+          });
+        }
+
+      });
     } else {
       console.log(`[未知类型] ${msg.type}`);
     }
