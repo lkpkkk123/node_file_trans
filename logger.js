@@ -14,33 +14,40 @@ const customFormat = winston.format.printf(({ timestamp, level, message, caller 
   return `${timestamp} [${level.toUpperCase()}] [${location}] ${message}`;
 });
 
-const baseLogger = winston.createLogger({
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-    winston.format.errors({ stack: true }),
-    customFormat
-  ),
-  transports: [
-    // 控制台输出
-    new winston.transports.Console({
-      level: 'debug'
-    }),
-    // 所有日志文件
-    new winston.transports.File({
-      filename: path.join(logDir, 'app.log'),
-      level: 'info',
-      maxsize: 10 * 1024 * 1024, // 10MB
-      maxFiles: 5
-    }),
-    // 错误日志文件
-    new winston.transports.File({
-      filename: path.join(logDir, 'error.log'),
-      level: 'error',
-      maxsize: 10 * 1024 * 1024,
-      maxFiles: 5
-    })
-  ]
-});
+// 使用对象来保存 logger 实例，这样可以动态更新
+const loggerContainer = {
+  instance: null
+};
+
+function create(logfile) {
+  loggerContainer.instance = winston.createLogger({
+    format: winston.format.combine(
+      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
+      winston.format.errors({ stack: true }),
+      customFormat
+    ),
+    transports: [
+      // 控制台输出
+      new winston.transports.Console({
+        level: 'debug'
+      }),
+      // 所有日志文件
+      new winston.transports.File({
+        filename: path.join(logDir, logfile + '.log'),
+        level: 'info',
+        maxsize: 10 * 1024 * 1024, // 10MB
+        maxFiles: 5
+      }),
+      // 错误日志文件
+      new winston.transports.File({
+        filename: path.join(logDir, logfile + '_error.log'),
+        level: 'error',
+        maxsize: 10 * 1024 * 1024,
+        maxFiles: 5
+      })
+    ]
+  });
+}
 
 // 获取调用位置
 function getCaller() {
@@ -62,12 +69,63 @@ function getCaller() {
   return 'unknown';
 }
 
-// 包装 logger 方法以自动添加调用位置
+// 包装 logger 方法以自动添加调用位置，并动态引用 logger 实例
 const logger = {
-  info: (message) => baseLogger.info({ message, caller: getCaller() }),
-  error: (message) => baseLogger.error({ message, caller: getCaller() }),
-  warn: (message) => baseLogger.warn({ message, caller: getCaller() }),
-  debug: (message) => baseLogger.debug({ message, caller: getCaller() })
+  info: (message) => {
+    if (loggerContainer.instance) {
+      loggerContainer.instance.info({ message, caller: getCaller() });
+    } else {
+      console.log(`[INFO] ${message}`); // 降级到 console
+    }
+  },
+  error: (message) => {
+    if (loggerContainer.instance) {
+      loggerContainer.instance.error({ message, caller: getCaller() });
+    } else {
+      console.error(`[ERROR] ${message}`);
+    }
+  },
+  warn: (message) => {
+    if (loggerContainer.instance) {
+      loggerContainer.instance.warn({ message, caller: getCaller() });
+    } else {
+      console.warn(`[WARN] ${message}`);
+    }
+  },
+  debug: (message) => {
+    if (loggerContainer.instance) {
+      loggerContainer.instance.debug({ message, caller: getCaller() });
+    } else {
+      console.log(`[DEBUG] ${message}`);
+    }
+  }
 };
 
+// 关闭日志并等待写入完成
+async function close() {
+  if (loggerContainer.instance) {
+    // 强制flush所有日志
+    const instance = loggerContainer.instance;
+    
+    // 关闭所有 transport
+    for (const transport of instance.transports) {
+      if (typeof transport.close === 'function') {
+        await new Promise(resolve => {
+          transport.once('finish', resolve);
+          transport.end();
+          setTimeout(resolve, 500); // 超时保护
+        });
+      }
+    }
+    
+    // 关闭 logger
+    instance.end();
+    
+    // 等待一小段时间确保写入完成
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+}
+
 module.exports = logger;
+module.exports.create = create;
+module.exports.close = close;

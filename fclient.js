@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const logger = require('./logger');
-
+const createLog=require('./logger').create;
+createLog('client');
 // 配置
 const CONFIG = {
   HOST: '127.0.0.1',
@@ -68,7 +69,7 @@ class FileUploadClient {
       } catch (err) {
         // 不是 JSON，可能是文本消息
         const textMsg = this.buffer.slice(0, nullIndex).toString('utf8');
-        logger.info('服务器消息:', textMsg);
+        logger.info(`服务器消息:${textMsg}`);
         this.buffer = this.buffer.slice(nullIndex + 1);
       }
     } else if (this.buffer.length > 0) {
@@ -76,7 +77,7 @@ class FileUploadClient {
       const lines = this.buffer.toString('utf8').split('\n');
       for (let i = 0; i < lines.length - 1; i++) {
         if (lines[i].trim()) {
-          logger.info('服务器消息:', lines[i]);
+          logger.info(`服务器消息: ${lines[i]}`);
         }
       }
       // 保留最后一行（可能不完整）
@@ -86,7 +87,7 @@ class FileUploadClient {
 
   // 处理服务器 JSON 响应
   handleResponse(response) {
-    logger.info('收到响应:', response);
+    logger.info(`收到响应: ${JSON.stringify(response)}`);
     
     if (response.type === 'ack_file_ready') {
       // 服务器准备好接收文件
@@ -101,7 +102,7 @@ class FileUploadClient {
       this.sendFileData();
       
     } else if (response.type === 'finish') {
-      logger.info('✓ 服务器确认:', response.message);
+      logger.info(`✓ 服务器确认: ${response.message}`);
       if (response.server_md5) {
         const expected = (this.currentFile && this.currentFile.md5) || this.lastMd5;
         logger.info(`服务器 MD5: ${response.server_md5}`);
@@ -143,7 +144,12 @@ class FileUploadClient {
       const hash = crypto.createHash('md5');
       const stream = fs.createReadStream(filePath);
       
-      stream.on('data', (data) => hash.update(data));
+      stream.on('data', (data) => {
+        if (filePath.endsWith('.m3u8')) {
+          logger.info(`md5 ${filePath} data:${data}`);
+        }
+        hash.update(data);
+      });
       stream.on('end', () => resolve(hash.digest('hex')));
       stream.on('error', reject);
     });
@@ -172,7 +178,7 @@ class FileUploadClient {
     const filename = serverPath;
     
     
-    logger.info('\n=== 文件上传 ===');
+    logger.info('=== 文件上传 ===');
     logger.info(`文件: ${filename}`);
     logger.info(`大小: ${this.formatSize(stats.size)}`);
     logger.info(`路径: ${filePath}`);
@@ -181,7 +187,7 @@ class FileUploadClient {
     // 计算 MD5
     let md5 = '';
     if(useMd5) {
-      logger.info('\n计算 MD5...');
+      logger.info('计算 MD5...');
       md5 = await this.calculateMD5(filePath);
       logger.info(`MD5: ${md5}`);
     }
@@ -235,6 +241,9 @@ class FileUploadClient {
     logger.info('\n开始传输文件...\n');
 
     this.currentFile.stream.on('data', (chunk) => {
+      if (this.currentFile.path.endsWith('.m3u8')) {
+        logger.info(`send ${this.currentFile.path} data:${chunk}`);
+      }
       // 检查是否可以写入
       const canWrite = this.socket.write(chunk);
       this.currentFile.sent += chunk.length;

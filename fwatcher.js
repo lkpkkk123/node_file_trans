@@ -3,19 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const { FileUploadClient } = require('./fclient.js');
 const logger = require('./logger.js');
+const createLog=require('./logger.js').create;
+createLog('watcher');
 
-// 配置
-const CONFIG = {
-  WATCH_DIR: process.argv[2] || '/home/likp/watch_uploads',  // 监听目录
-  SERVER_HOST: process.argv[3] || '127.0.0.1',
-  SERVER_PORT: parseInt(process.argv[4]) || 3000,
-  ENABLE_RESUME: true,
-  ENABLE_MD5: false,
-  VIRTUAL_DIR: 'uploads',  // 上传到服务器的虚拟目录
-  SYNC_INTERVAL: 5000,  // 文件关闭后等待5秒再上传（确保写入完成）
-  SYNC_DELETE_FILE: true,  // 同步删除的文件
-  DELETE_ON_SUCCESS: false  // 上传成功后删除本地文件
-};
+
+const { WatcherConfig: CONFIG } = require('./cfg.js');
+
 
 // 正在上传的文件集合
 //const uploadingFiles = new Set();
@@ -53,6 +46,8 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     await client.connect();
   } catch (err) {
     logger.error('✗ 无法连接到服务器，退出程序');
+    // 等待日志写入
+    await new Promise(resolve => setTimeout(resolve, 100));
     process.exit(1);
   }
 
@@ -217,12 +212,16 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     
     await watcher.close();
     logger.info('监听器已关闭');
+    // 等待日志写入
+    await new Promise(resolve => setTimeout(resolve, 200));
     process.exit(0);
   });
 
   // 捕获未处理的异常
-  process.on('uncaughtException', (err) => {
+  process.on('uncaughtException', async (err) => {
     logger.error('[致命错误]', err);
+    // 等待日志写入
+    await new Promise(resolve => setTimeout(resolve, 200));
     process.exit(1);
   });
 

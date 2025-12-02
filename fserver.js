@@ -4,21 +4,11 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const logger = require('./logger');
-// 配置
-const CONFIG = {
-  PORT: 3000,
-  HOST: '0.0.0.0',
-  //UPLOAD_PATH: '/home/likp/test_uploads',
-  UPLOAD_PATH_MAP: new Map(
-    [['.','/home/likp/test_uploads'],//virtual path,real path .是根目录，必须有一个根目录
-      ['uploads','/home/likp/test_uploads2']]),
-  MAX_CONNECTIONS: 500,
-  MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
-  MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
-  CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
-  RESUME_TIMEOUT: 2 * 60 * 60 * 1000, // 2小时
-  DELETE_EMPTY_DIR: true, // 收到删除文件时，检查删除空目录
-};
+const createLog=require('./logger').create;
+const { ServerConfig: CONFIG } = require('./cfg.js');
+createLog('server');
+
+// 获取系统运行毫秒数
 function GetTickCount() {
   return Math.floor(os.uptime() * 1000);
 }
@@ -116,6 +106,7 @@ class myFile {
         logger.error(`[文件错误] ${this.filePath}: ${err.message}`);
         //this.hasError = true;
         this.cleanup();
+        this.hasError = false;//可能是目录不存在尝试重建目录
         reject(err);
       });
       this.stream.on('open', (fd) => {
@@ -140,6 +131,7 @@ class myFile {
         if (i == 0)
         {
           let dirName = path.dirname(filePath);
+          logger.info(`try create dir for ${filePath} : ${dirName}`);
           fs.mkdirSync(dirName, { recursive: true });
         }
 
@@ -273,10 +265,12 @@ class myFile {
           this.stream.destroy();
         }
         logger.info(`[文件] ${this.filePath} 流已关闭`);
+        this.stream = null;
       } catch (err) {
         logger.error(`[文件] ${this.filePath} 关闭流时出错: ${err.message}`);
         try {
           this.stream.destroy();
+          this.stream = null;
         } catch (e) {
           // 忽略 destroy 错误
         }
@@ -378,7 +372,7 @@ class mySession {
     this.send(JSON.stringify(resp) + '\0');
   }
 
-  onData(chunk) {
+  async onData(chunk) {
     this.resetTimeout();
     
     // 检查缓冲区大小
@@ -394,7 +388,7 @@ class mySession {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     
     if (this.isFirstMessage) {
-      this.processJsonMessage();
+      await this.processJsonMessage();
     } else {
       const result = this.processBinaryData();
       if (result === 0) {
@@ -418,7 +412,7 @@ class mySession {
       }
     });
   }
-  processJsonMessage() {
+  async processJsonMessage() {
     const nullIndex = this.buffer.indexOf(0);
     
     if (nullIndex === -1) {
@@ -431,9 +425,9 @@ class mySession {
     this.checkAndDelTimeOutResumeFile();
     try {
       this.jsonMessage = JSON.parse(jsonString);
-      logger.info(`[JSON] ${this.address} 接收到:`, this.jsonMessage);
+      logger.info(`[JSON] ${this.address} 接收到:${jsonString}`);
       
-      this.handleJsonMessage(this.jsonMessage);
+      await this.handleJsonMessage(this.jsonMessage);
       
       this.buffer = this.buffer.slice(nullIndex + 1);
       
@@ -473,7 +467,7 @@ class mySession {
     // }
   }
 
-  handleJsonMessage(msg) {
+  async handleJsonMessage(msg) {
     if (msg.type === 'file') {
       logger.info(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, md5: ${msg.md5sum}`);
       //将msg.filename分割成路径和文件名
@@ -493,12 +487,12 @@ class mySession {
             startPos = file.writtenSize;
             file.md5sum = msg.md5sum; // 更新 MD5
             file.size = msg.size; // 更新文件大小
-            file.Open(startPos, fPath);
+            await file.Open(startPos, fPath);
             logger.info(`[断点续传] ${fPath} 从 ${startPos} 继续`);
           } else {
             logger.info('[警告] 文件名不匹配或不可续传，创建新文件');
             file = new myFile(fPath, msg.size, this, msg.md5sum, allowResume);
-            file.Open(0, fPath);
+            await file.Open(0, fPath);
             if (file.allowResume) {
               file.inQueueTime=GetTickCount();
               files.set(fPath, file);
@@ -506,7 +500,7 @@ class mySession {
           }
         } else {
           file = new myFile(fPath, msg.size, this,msg.md5sum, allowResume);
-          file.Open(0, fPath);
+          await file.Open(0, fPath);
           if (file.allowResume) {
             file.inQueueTime=GetTickCount();
             files.set(fPath, file);
@@ -587,7 +581,7 @@ class mySession {
       }
       
       this.buffer = this.buffer.slice(toWrite);
-      logger.info('socket buffer size=',this.buffer.length);
+      logger.info('socket buffer size='+this.buffer.length);
 
       // 定期打印进度
       const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
