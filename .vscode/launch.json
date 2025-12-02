@@ -18,7 +18,7 @@
       "skipFiles": [
         "<node_internals>/**"
       ],
-      "program": "${workspaceFolder}/tcp-client.js",
+      "program": "${workspaceFolder}/cli.js",
       //传递参数
       "args": [
         "/home/likp/Downloads/SaperaLTSDKWow64Setup-9.00.zip",

@@ -2,7 +2,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-
+const os = require('os');
 // 配置
 const CONFIG = {
   PORT: 3000,
@@ -15,23 +15,28 @@ const CONFIG = {
   MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
   MAX_FILE_SIZE: 100 * 1024 * 1024 * 1024, // 100GB
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
+  RESUME_TIMEOUT: 2 * 60 * 60 * 1000, // 2小时
 };
-
+function GetTickCount() {
+  return Math.floor(os.uptime() * 1000);
+}
 function mapToRealPath(clientFileName)
 {
   const baseName = path.basename(clientFileName);
   const dirName = path.dirname(clientFileName);
   const firstLevelDir = dirName.split(path.sep)[0] || '.';
-  if (firstLevelDir === '.') {
-    clientFileName = '.' + path.sep + clientFileName;
-  }
+  // if (firstLevelDir === '.') {
+  //   clientFileName = '.' + path.sep + clientFileName;
+  // }
   if(CONFIG.UPLOAD_PATH_MAP.has(firstLevelDir)){
     let realPath = CONFIG.UPLOAD_PATH_MAP.get(firstLevelDir);
-    const endPath=clientFileName.replace(firstLevelDir,realPath);
+    // 移除首层虚拟目录，拼接真实路径
+    const relativePath = dirName === firstLevelDir ? baseName : clientFileName.substring(firstLevelDir.length + path.sep.length);
+    const endPath = path.join(realPath, relativePath);
     return endPath;
   }
   else{
-    const endPath = CONFIG.UPLOAD_PATH_MAP.get('.')+path.sep+clientFileName;
+    const endPath = path.join(CONFIG.UPLOAD_PATH_MAP.get('.'), clientFileName);
     return endPath;
   }
 }
@@ -64,8 +69,7 @@ function sanitizeFilename(filename) {
 }
 
 class myFile {
-  constructor(id, filePath, size, session, md5sum,allowResume = false) {
-    this.id = id;
+  constructor(filePath, size, session, md5sum,allowResume = false,) {
     this.size = size;
     this.writtenSize = 0;
     this.hasError = false;
@@ -75,7 +79,9 @@ class myFile {
     this.awaitDrain = false;
     this.filePath = filePath;
     this.allowResume = allowResume;
-    this.CHECK_MD5 = md5sum; // 是否在完成后校验 MD5
+    this.md5sum = md5sum;
+    this.CHECK_MD5 = (md5sum !== ''); // 是否在完成后校验 MD5
+    this.inQueueTime = 0;
     
     // 验证文件大小
     if (size > CONFIG.MAX_FILE_SIZE) {
@@ -144,7 +150,7 @@ class myFile {
         this.session.notifyError('无法打开文件: ' + filePath);
       }
       if (this.allowResume){
-        files.delete(this.id);
+        files.delete(this.filePath);
       }
     }
     return isOpenSuccess;
@@ -173,7 +179,7 @@ class myFile {
       
       // 从 Map 中移除
       if (this.allowResume) {
-        files.delete(this.id);
+        files.delete(this.filePath);
       }
       
       // 通知客户端
@@ -399,6 +405,17 @@ class mySession {
     }
   }
 
+  checkAndDelTimeOutResumeFile()
+  {
+    const now = GetTickCount();
+    files.forEach((file, filePath) => {
+      if ((now - file.inQueueTime) > CONFIG.RESUME_TIMEOUT) {
+        console.log(`[清理] 超时未完成的断点续传文件: ${filePath}`);
+        file.cleanup();
+        files.delete(filePath);
+      }
+    });
+  }
   processJsonMessage() {
     const nullIndex = this.buffer.indexOf(0);
     
@@ -409,7 +426,7 @@ class mySession {
     
     const jsonBuffer = this.buffer.slice(0, nullIndex);
     const jsonString = jsonBuffer.toString('utf8');
-    
+    this.checkAndDelTimeOutResumeFile();
     try {
       this.jsonMessage = JSON.parse(jsonString);
       console.log(`[JSON] ${this.address} 接收到:`, this.jsonMessage);
@@ -454,9 +471,10 @@ class mySession {
     //   return;
     // }
   }
+
   handleJsonMessage(msg) {
     if (msg.type === 'file') {
-      console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, ID: ${msg.id}`);
+      console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, md5: ${msg.md5sum}`);
       //将msg.filename分割成路径和文件名
       //let fPath = sanitizeFilename(msg.filename);
       let fPath = mapToRealPath(msg.filename);
@@ -466,25 +484,29 @@ class mySession {
         let startPos = 0;
         
         // 检查是否断点续传
-        if (allowResume && files.has(msg.id)) {
-          file = files.get(msg.id);
-          if (file && file.allowResume && file.size > file.writtenSize &&  file.filePath === fPath) {
+        if (allowResume && files.has(fPath)) {
+          file = files.get(fPath);
+          if (file && file.allowResume && msg.size > file.writtenSize &&  file.filePath === fPath) {
             startPos = file.writtenSize;
+            file.md5sum = msg.md5sum; // 更新 MD5
+            file.size = msg.size; // 更新文件大小
             file.Open(startPos, fPath);
             console.log(`[断点续传] ${fPath} 从 ${startPos} 继续`);
           } else {
             console.log('[警告] 文件名不匹配或不可续传，创建新文件');
-            file = new myFile(msg.id, fPath, msg.size, this, msg.id !== '', allowResume);
+            file = new myFile(fPath, msg.size, this, msg.md5sum, allowResume);
             file.Open(0, fPath);
             if (file.allowResume) {
-              files.set(msg.id, file);
+              file.inQueueTime=GetTickCount();
+              files.set(fPath, file);
             }
           }
         } else {
-          file = new myFile(msg.id, fPath, msg.size, this,msg.id !== '', allowResume);
+          file = new myFile(fPath, msg.size, this,msg.md5sum, allowResume);
           file.Open(0, fPath);
           if (file.allowResume) {
-            files.set(msg.id, file);
+            file.inQueueTime=GetTickCount();
+            files.set(fPath, file);
           }
         }
         
@@ -532,6 +554,7 @@ class mySession {
       }
       
       this.buffer = this.buffer.slice(toWrite);
+      console.log('socket buffer size=',this.buffer.length);
 
       // 定期打印进度
       const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
@@ -558,15 +581,15 @@ class mySession {
       let checksumMatch = true;
       if (file.CHECK_MD5) {
         serverMd5 = await file.computeMD5();
-        checksumMatch = serverMd5 === file.id;
-        console.log(`[校验] ${file.filePath} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.id}`}`);
+        checksumMatch = serverMd5 === file.md5sum;
+        console.log(`[校验] ${file.filePath} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.md5sum}`}`);
       }
 
       const resp = {
         type: 'finish',
         message: '文件传输完成',
         server_md5: file.CHECK_MD5 ? serverMd5 : null,
-        expected_md5: file.id,
+        expected_md5: file.md5sum,
         match: checksumMatch
       };
       this.send(JSON.stringify(resp) + '\0');
@@ -574,8 +597,8 @@ class mySession {
       console.error(`[校验错误] ${file.filePath}: ${err.message}`);
       this.notifyError('服务器校验失败: ' + err.message);
     } finally {
-      if (file.allowResume) {
-        files.delete(file.id);
+      if (!file.allowResume) {
+        files.delete(file.filePath);
       }
     }
   }
@@ -606,9 +629,9 @@ class mySession {
       console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filePath}`);
       
       // 如果不是断点续传模式，从 files Map 中移除
-      if (!this.currentFile.allowResume && files.has(this.currentFile.id)) {
-        files.delete(this.currentFile.id);
-        console.log(`[清理] 从 files Map 移除: ${this.currentFile.id}`);
+      if (!this.currentFile.allowResume && files.has(this.currentFile.filePath)) {
+        files.delete(this.currentFile.filePath);
+        console.log(`[清理] 从 files Map 移除: ${this.currentFile.filePath}`);
       }
       
       this.currentFile.cleanup();
@@ -620,6 +643,7 @@ class mySession {
     
     // 从客户端列表移除
     clients.delete(this.socket);
+ 
     console.log('当前连接数:', clients.size);
   }
 

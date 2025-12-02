@@ -9,6 +9,7 @@
     "server": "node tcp-server-fixed.js",
     "client": "node tcp-client.js",
     "upload": "node tcp-client.js",
+    "watch": "node file-watcher.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -16,6 +17,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "chokidar": "^3.5.3"
+  },
   "devDependencies": {
     "eslint": "^8.57.1"
   }

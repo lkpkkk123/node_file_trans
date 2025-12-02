@@ -1,0 +1,197 @@
+const chokidar = require('chokidar');
+const path = require('path');
+const fs = require('fs');
+const { FileUploadClient } = require('./tcp-client.js');
+
+// 配置
+const CONFIG = {
+  WATCH_DIR: process.argv[2] || '/home/likp/watch_uploads',  // 监听目录
+  SERVER_HOST: process.argv[3] || '127.0.0.1',
+  SERVER_PORT: parseInt(process.argv[4]) || 3000,
+  ENABLE_RESUME: true,
+  ENABLE_MD5: true,
+  VIRTUAL_DIR: 'uploads',  // 上传到服务器的虚拟目录
+  SYNC_INTERVAL: 5000,  // 文件关闭后等待5秒再上传（确保写入完成）
+};
+
+// 正在上传的文件集合
+//const uploadingFiles = new Set();
+const pendingUploads = new Set();  // 延迟上传队列
+
+console.log('='.repeat(60));
+console.log('文件监听自动上传服务');
+console.log('='.repeat(60));
+console.log(`监听目录: ${CONFIG.WATCH_DIR}`);
+console.log(`服务器: ${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}`);
+console.log(`虚拟目录: ${CONFIG.VIRTUAL_DIR}`);
+console.log(`MD5 校验: ${CONFIG.ENABLE_MD5 ? '开启' : '关闭'}`);
+console.log(`断点续传: ${CONFIG.ENABLE_RESUME ? '开启' : '关闭'}`);
+console.log('='.repeat(60));
+console.log();
+
+// 确保监听目录存在
+if (!fs.existsSync(CONFIG.WATCH_DIR)) {
+  console.log(`[系统] 创建监听目录: ${CONFIG.WATCH_DIR}`);
+  fs.mkdirSync(CONFIG.WATCH_DIR, { recursive: true });
+}
+
+// 主函数
+(async function main() {
+  const client = new FileUploadClient(
+    CONFIG.SERVER_HOST,
+    CONFIG.SERVER_PORT,
+    CONFIG.ENABLE_RESUME,
+    true,  // 不是测试模式
+    CONFIG.ENABLE_MD5,
+    CONFIG.VIRTUAL_DIR
+  );
+  try {
+    await client.connect();
+  } catch (err) {
+    console.error('✗ 无法连接到服务器，退出程序');
+    process.exit(1);
+  }
+
+  // 上传文件函数
+  async function uploadFile(filePath) {
+    const fileName = path.basename(filePath);
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(filePath)) {
+      console.log(`[跳过] ${fileName} - 文件不存在`);
+      return true;
+    }
+
+    // 检查文件大小
+    const stats = fs.statSync(filePath);
+    if (stats.size === 0) {
+      console.log(`[跳过] ${fileName} - 文件为空`);
+      return true;
+    }
+
+    try {
+      console.log(`\n[上传] ${fileName} (${formatSize(stats.size)})`);
+      
+      const uploadPromise = new Promise((resolve, reject) => {
+        client.uploadComplete = resolve;
+        client.uploadFailed = reject;
+      });
+      if(!client.isConnected()) {
+        console.log('重新连接服务器...');
+        await client.connect();
+      }
+      let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
+      relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
+      await client.uploadFile(filePath, relativePath, CONFIG.ENABLE_MD5);
+      await uploadPromise;
+      
+      console.log(`[完成] ${fileName} 上传成功\n`);
+      return true;
+      
+    } catch (err) {
+      console.error(`[失败] ${fileName} 上传失败: ${err.message}\n`);
+      return false;
+    }
+  }
+
+  // 格式化文件大小
+  function formatSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+  }
+
+  function addToList(filePath) {
+    if (pendingUploads.size > 200)
+    {
+      console.log('[警告] 待上传文件过多>200,丢弃文件 ' + filePath);
+      return;
+    }
+    pendingUploads.add(filePath);
+    console.log('上传文件队列添加 当前大小: ' + pendingUploads.size);
+  }
+
+  // 创建文件监听器
+  const watcher = chokidar.watch(CONFIG.WATCH_DIR, {
+    ignored: /(^|[\/\\])\../,  // 忽略隐藏文件
+    persistent: true,
+    ignoreInitial: true,  // 忽略初始扫描的文件
+    awaitWriteFinish: {
+      stabilityThreshold: 2000,  // 文件2秒内没有变化才认为写入完成
+      pollInterval: 100
+    }
+  });
+
+  // 上传队列处理（递归延时，避免重叠）
+  async function processUploadQueue() {
+    if (pendingUploads.size > 0) {
+      const filesToUpload = Array.from(pendingUploads);
+      pendingUploads.clear();
+      
+      for (const filePath of filesToUpload) {
+        await uploadFile(filePath);
+      }
+    }
+    
+    // 等待1秒后再次检查队列
+    setTimeout(processUploadQueue, CONFIG.SYNC_INTERVAL);
+  }
+  
+  // 启动队列处理
+  processUploadQueue();
+
+  // 监听文件添加事件（文件写入完成）
+  watcher.on('add', (filePath) => {
+    const fileName = path.basename(filePath);
+    console.log(`[检测] ${fileName} - 文件已写入完成`);
+
+    addToList(filePath);
+  });
+
+  // 监听文件变化事件
+  watcher.on('change', (filePath) => {
+    const fileName = path.basename(filePath);
+    console.log(`[变化] ${fileName} - 文件正在修改`);
+    addToList(filePath);
+  });
+
+  //监听删除事件
+  watcher.on('unlink', (filePath) => {
+    const fileName = path.basename(filePath);
+    console.log(`[删除] ${fileName} - 文件已被删除`);
+  });
+
+  // 监听错误
+  watcher.on('error', (error) => {
+    console.error('[错误] 监听器错误:', error);
+  });
+
+  // 监听器就绪
+  watcher.on('ready', () => {
+    console.log('[就绪] 文件监听器已启动，等待文件...\n');
+  });
+
+  // 优雅退出
+  process.on('SIGINT', async () => {
+    console.log('\n\n正在关闭监听器...');
+    
+    pendingUploads.clear();
+    
+    await watcher.close();
+    console.log('监听器已关闭');
+    process.exit(0);
+  });
+
+  // 捕获未处理的异常
+  process.on('uncaughtException', (err) => {
+    console.error('[致命错误]', err);
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[未处理的 Promise 拒绝]', reason);
+  });
+
+})(); // 结束 async main()
