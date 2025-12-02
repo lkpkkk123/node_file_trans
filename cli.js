@@ -1,4 +1,4 @@
-const { FileUploadClient } = require('./tcp-client.js');
+const { FileUploadClient } = require('./fclient.js');
 const path = require('path');
 
 // 主函数
@@ -27,11 +27,11 @@ async function main() {
   }
   
   if (args.length === 0) {
-    console.log('用法: node tcp-client.js <文件路径> [服务器地址] [端口]');
+    console.log('用法: node fclient.js <文件路径> [服务器地址] [端口]');
     console.log('\n示例:');
-    console.log('  node tcp-client.js ./test.txt');
-    console.log('  node tcp-client.js ./test.txt 192.168.1.100');
-    console.log('  node tcp-client.js ./test.txt 192.168.1.100 3000 --resume');
+    console.log('  node fclient.js ./test.txt');
+    console.log('  node fclient.js ./test.txt 192.168.1.100');
+    console.log('  node fclient.js ./test.txt 192.168.1.100 3000 --resume');
     console.log('\n参数说明:');
     console.log('  <文件路径>   - 要上传的文件路径（必需）');
     console.log('  [服务器地址] - 服务器 IP 地址（可选，默认: 127.0.0.1）');

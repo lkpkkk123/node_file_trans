@@ -6,10 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --inspect index.js",
-    "server": "node tcp-server-fixed.js",
-    "client": "node tcp-client.js",
-    "upload": "node tcp-client.js",
-    "watch": "node file-watcher.js",
+    "server": "node fserver.js",
+    "client": "node fclient.js",
+    "upload": "node fclient.js",
+    "watch": "node fwatcher.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -18,7 +18,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "chokidar": "^3.5.3"
+    "chokidar": "^3.5.3",
+    "winston": "^3.18.3"
   },
   "devDependencies": {
     "eslint": "^8.57.1"

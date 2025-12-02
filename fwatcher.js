@@ -1,7 +1,8 @@
 const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs');
-const { FileUploadClient } = require('./tcp-client.js');
+const { FileUploadClient } = require('./fclient.js');
+const logger = require('./logger.js');
 
 // 配置
 const CONFIG = {
@@ -21,20 +22,20 @@ const CONFIG = {
 const pendingUploads = new Set();  // 延迟上传队列
 const pendingDeletes = new Set();  // 删除队列上传队列
 
-console.log('='.repeat(60));
-console.log('文件监听自动上传服务');
-console.log('='.repeat(60));
-console.log(`监听目录: ${CONFIG.WATCH_DIR}`);
-console.log(`服务器: ${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}`);
-console.log(`虚拟目录: ${CONFIG.VIRTUAL_DIR}`);
-console.log(`MD5 校验: ${CONFIG.ENABLE_MD5 ? '开启' : '关闭'}`);
-console.log(`断点续传: ${CONFIG.ENABLE_RESUME ? '开启' : '关闭'}`);
-console.log('='.repeat(60));
-console.log();
+logger.info('='.repeat(60));
+logger.info('文件监听自动上传服务');
+logger.info('='.repeat(60));
+logger.info(`监听目录: ${CONFIG.WATCH_DIR}`);
+logger.info(`服务器: ${CONFIG.SERVER_HOST}:${CONFIG.SERVER_PORT}`);
+logger.info(`虚拟目录: ${CONFIG.VIRTUAL_DIR}`);
+logger.info(`MD5 校验: ${CONFIG.ENABLE_MD5 ? '开启' : '关闭'}`);
+logger.info(`断点续传: ${CONFIG.ENABLE_RESUME ? '开启' : '关闭'}`);
+logger.info('='.repeat(60));
+logger.info();
 
 // 确保监听目录存在
 if (!fs.existsSync(CONFIG.WATCH_DIR)) {
-  console.log(`[系统] 创建监听目录: ${CONFIG.WATCH_DIR}`);
+  logger.info(`[系统] 创建监听目录: ${CONFIG.WATCH_DIR}`);
   fs.mkdirSync(CONFIG.WATCH_DIR, { recursive: true });
 }
 
@@ -51,7 +52,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   try {
     await client.connect();
   } catch (err) {
-    console.error('✗ 无法连接到服务器，退出程序');
+    logger.error('✗ 无法连接到服务器，退出程序');
     process.exit(1);
   }
 
@@ -61,26 +62,26 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
-      console.log(`[跳过] ${fileName} - 文件不存在`);
+      logger.info(`[跳过] ${fileName} - 文件不存在`);
       return true;
     }
 
     // 检查文件大小
     const stats = fs.statSync(filePath);
     if (stats.size === 0) {
-      console.log(`[跳过] ${fileName} - 文件为空`);
+      logger.info(`[跳过] ${fileName} - 文件为空`);
       return true;
     }
 
     try {
-      console.log(`\n[上传] ${fileName} (${formatSize(stats.size)})`);
+      logger.info(`\n[上传] ${fileName} (${formatSize(stats.size)})`);
       
       const uploadPromise = new Promise((resolve, reject) => {
         client.uploadComplete = resolve;
         client.uploadFailed = reject;
       });
       if(!client.isConnected()) {
-        console.log('重新连接服务器...');
+        logger.info('重新连接服务器...');
         await client.connect();
       }
       let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
@@ -88,11 +89,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       await client.uploadFile(filePath, relativePath, CONFIG.ENABLE_MD5);
       await uploadPromise;
       
-      console.log(`[完成] ${fileName} 上传成功\n`);
+      logger.info(`[完成] ${fileName} 上传成功\n`);
       return true;
       
     } catch (err) {
-      console.error(`[失败] ${fileName} 上传失败: ${err.message}\n`);
+      logger.error(`[失败] ${fileName} 上传失败: ${err.message}\n`);
       return false;
     }
   }
@@ -109,11 +110,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   function addToList(filePath) {
     if (pendingUploads.size > 200)
     {
-      console.log('[警告] 待上传文件过多>200,丢弃文件 ' + filePath);
+      logger.info('[警告] 待上传文件过多>200,丢弃文件 ' + filePath);
       return;
     }
     pendingUploads.add(filePath);
-    console.log('上传文件队列添加 当前大小: ' + pendingUploads.size);
+    logger.info('上传文件队列添加 当前大小: ' + pendingUploads.size);
   }
 
   // 创建文件监听器
@@ -138,9 +139,9 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
         if (succ && CONFIG.DELETE_ON_SUCCESS) {
           fs.unlink(filePath, (err) => {
             if (err) {
-              console.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
+              logger.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
             } else {
-              console.log(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
+              logger.info(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
             }
           });
         }
@@ -152,11 +153,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       pendingDeletes.clear();
 
       if(!client.isConnected()) {
-        console.log('重新连接服务器...');
+        logger.info('重新连接服务器...');
         await client.connect();
       }
       for (const filePath of filesToDelete) {
-        console.log(`[请求服务器删除] ${path.basename(filePath)}`);
+        logger.info(`[请求服务器删除] ${path.basename(filePath)}`);
         let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
         relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
         client.delFile(relativePath);
@@ -173,7 +174,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   // 监听文件添加事件（文件写入完成）
   watcher.on('add', (filePath) => {
     const fileName = path.basename(filePath);
-    console.log(`[检测] ${fileName} - 文件已写入完成`);
+    logger.info(`[检测] ${fileName} - 文件已写入完成`);
 
     addToList(filePath);
   });
@@ -181,7 +182,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   // 监听文件变化事件
   watcher.on('change', (filePath) => {
     const fileName = path.basename(filePath);
-    console.log(`[变化] ${fileName} - 文件正在修改`);
+    logger.info(`[变化] ${fileName} - 文件正在修改`);
     addToList(filePath);
   });
 
@@ -194,39 +195,39 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       return;
 
     const fileName = path.basename(filePath);
-    console.log(`[删除] ${fileName} - 文件已被删除`);
+    logger.info(`[删除] ${fileName} - 文件已被删除`);
     pendingDeletes.add(filePath);
   });
 
   // 监听错误
   watcher.on('error', (error) => {
-    console.error('[错误] 监听器错误:', error);
+    logger.error('[错误] 监听器错误:', error);
   });
 
   // 监听器就绪
   watcher.on('ready', () => {
-    console.log('[就绪] 文件监听器已启动，等待文件...\n');
+    logger.info('[就绪] 文件监听器已启动，等待文件...\n');
   });
 
   // 优雅退出
   process.on('SIGINT', async () => {
-    console.log('\n\n正在关闭监听器...');
+    logger.info('\n\n正在关闭监听器...');
     
     pendingUploads.clear();
     
     await watcher.close();
-    console.log('监听器已关闭');
+    logger.info('监听器已关闭');
     process.exit(0);
   });
 
   // 捕获未处理的异常
   process.on('uncaughtException', (err) => {
-    console.error('[致命错误]', err);
+    logger.error('[致命错误]', err);
     process.exit(1);
   });
 
   process.on('unhandledRejection', (reason, promise) => {
-    console.error('[未处理的 Promise 拒绝]', reason);
+    logger.error('[未处理的 Promise 拒绝]', reason);
   });
 
 })(); // 结束 async main()

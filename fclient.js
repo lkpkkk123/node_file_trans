@@ -2,6 +2,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const logger = require('./logger');
 
 // 配置
 const CONFIG = {
@@ -34,14 +35,14 @@ class FileUploadClient {
       this.socket.connect(this.port, this.host, () => {
         this.socket.setNoDelay(true);
         this.socket.setKeepAlive(true, 30000);
-        console.log(`✓ 已连接到服务器 ${this.host}:${this.port}`);
+        logger.info(`✓ 已连接到服务器 ${this.host}:${this.port}`);
         resolve();
       });
 
       this.socket.on('data', this.onData.bind(this));
       this.socket.on('close', this.onClose.bind(this));
       this.socket.on('error', (err) => {
-        console.error('✗ 连接错误:', err.message);
+        logger.error('✗ 连接错误:', err.message);
         reject(err);
       });
     });
@@ -67,7 +68,7 @@ class FileUploadClient {
       } catch (err) {
         // 不是 JSON，可能是文本消息
         const textMsg = this.buffer.slice(0, nullIndex).toString('utf8');
-        console.log('服务器消息:', textMsg);
+        logger.info('服务器消息:', textMsg);
         this.buffer = this.buffer.slice(nullIndex + 1);
       }
     } else if (this.buffer.length > 0) {
@@ -75,7 +76,7 @@ class FileUploadClient {
       const lines = this.buffer.toString('utf8').split('\n');
       for (let i = 0; i < lines.length - 1; i++) {
         if (lines[i].trim()) {
-          console.log('服务器消息:', lines[i]);
+          logger.info('服务器消息:', lines[i]);
         }
       }
       // 保留最后一行（可能不完整）
@@ -85,7 +86,7 @@ class FileUploadClient {
 
   // 处理服务器 JSON 响应
   handleResponse(response) {
-    console.log('收到响应:', response);
+    logger.info('收到响应:', response);
     
     if (response.type === 'ack_file_ready') {
       // 服务器准备好接收文件
@@ -93,27 +94,27 @@ class FileUploadClient {
       this.isWaitingAck = false;
       
       if (this.startPos > 0) {
-        console.log(`✓ 断点续传，从位置 ${this.startPos} 继续`);
+        logger.info(`✓ 断点续传，从位置 ${this.startPos} 继续`);
       }
       
       // 开始发送文件数据
       this.sendFileData();
       
     } else if (response.type === 'finish') {
-      console.log('✓ 服务器确认:', response.message);
+      logger.info('✓ 服务器确认:', response.message);
       if (response.server_md5) {
         const expected = (this.currentFile && this.currentFile.md5) || this.lastMd5;
-        console.log(`服务器 MD5: ${response.server_md5}`);
+        logger.info(`服务器 MD5: ${response.server_md5}`);
         if (expected) {
-          console.log(`本地 MD5: ${expected}`);
+          logger.info(`本地 MD5: ${expected}`);
           const matches = typeof response.match === 'boolean' ? response.match : response.server_md5 === expected;
           if (matches) {
-            console.log('✓ MD5 校验通过');
+            logger.info('✓ MD5 校验通过');
           } else {
             if (this.uploadFailed) {
               this.uploadFailed(new Error('✗ MD5 校验失败，文件可能损坏'));        
             }
-            console.error('✗ MD5 校验失败，文件可能损坏');
+            logger.error('✗ MD5 校验失败，文件可能损坏');
           }
         }
       }
@@ -126,13 +127,13 @@ class FileUploadClient {
       }
       
     } else if (response.type === 'error') {
-      console.error('✗ 服务器错误:', response.message);
+      logger.error('✗ 服务器错误:', response.message);
       this.disconnect();
       if (this.uploadFailed) {
         this.uploadFailed(new Error(response.message));        
       }
     } else if (response.type === 'del_file_ack') {
-      console.log(response.message);
+      logger.info(response.message);
     }
   }
 
@@ -171,18 +172,18 @@ class FileUploadClient {
     const filename = serverPath;
     
     
-    console.log('\n=== 文件上传 ===');
-    console.log(`文件: ${filename}`);
-    console.log(`大小: ${this.formatSize(stats.size)}`);
-    console.log(`路径: ${filePath}`);
-    console.log(`断点续传: ${this.enableResume ? '开启' : '关闭'}`);
+    logger.info('\n=== 文件上传 ===');
+    logger.info(`文件: ${filename}`);
+    logger.info(`大小: ${this.formatSize(stats.size)}`);
+    logger.info(`路径: ${filePath}`);
+    logger.info(`断点续传: ${this.enableResume ? '开启' : '关闭'}`);
     
     // 计算 MD5
     let md5 = '';
     if(useMd5) {
-      console.log('\n计算 MD5...');
+      logger.info('\n计算 MD5...');
       md5 = await this.calculateMD5(filePath);
-      console.log(`MD5: ${md5}`);
+      logger.info(`MD5: ${md5}`);
     }
     
     // 构建文件元数据消息
@@ -204,7 +205,7 @@ class FileUploadClient {
     this.lastMd5 = md5;
     
     // 发送元数据
-    console.log('\n发送文件元数据...');
+    logger.info('\n发送文件元数据...');
     const jsonString = JSON.stringify(metadata);
     this.socket.write(jsonString + '\0');
     this.isWaitingAck = true;
@@ -213,7 +214,7 @@ class FileUploadClient {
   // 发送文件数据
   sendFileData() {
     if (!this.currentFile) {
-      console.error('✗ 没有当前文件');
+      logger.error('✗ 没有当前文件');
       if (this.uploadFailed) {
         this.uploadFailed(new Error('✗ 没有当前文件'));        
       }
@@ -231,7 +232,7 @@ class FileUploadClient {
     this.currentFile.sent = this.startPos;
     let lastProgress = -1;
 
-    console.log('\n开始传输文件...\n');
+    logger.info('\n开始传输文件...\n');
 
     this.currentFile.stream.on('data', (chunk) => {
       // 检查是否可以写入
@@ -242,7 +243,7 @@ class FileUploadClient {
       const progress = Math.floor((this.currentFile.sent / this.currentFile.size) * 100);
       if (progress !== lastProgress && progress % 5 === 0) {
         const speed = this.calculateSpeed(this.currentFile.sent - this.startPos, Date.now() - startTime);
-        console.log(`进度: ${progress}% (${this.formatSize(this.currentFile.sent)}/${this.formatSize(this.currentFile.size)}) - ${speed}`);
+        logger.info(`进度: ${progress}% (${this.formatSize(this.currentFile.sent)}/${this.formatSize(this.currentFile.size)}) - ${speed}`);
         lastProgress = progress;
       }
       
@@ -263,14 +264,14 @@ class FileUploadClient {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       const avgSpeed = this.calculateSpeed(this.currentFile.sent - this.startPos, Date.now() - startTime);
       
-      console.log('\n✓ 文件发送完成');
-      console.log(`总用时: ${duration} 秒`);
-      console.log(`平均速度: ${avgSpeed}`);
-      console.log('\n等待服务器确认...');
+      logger.info('\n✓ 文件发送完成');
+      logger.info(`总用时: ${duration} 秒`);
+      logger.info(`平均速度: ${avgSpeed}`);
+      logger.info('\n等待服务器确认...');
     });
 
     this.currentFile.stream.on('error', (err) => {
-      console.error('✗ 读取文件错误:', err.message);
+      logger.error('✗ 读取文件错误:', err.message);
       this.disconnect();
       if (this.uploadFailed) {
         this.uploadFailed(err);        
@@ -302,7 +303,7 @@ class FileUploadClient {
   }
 
   onClose() {
-    console.log('\n连接已关闭');
+    logger.info('\n连接已关闭');
     if (!this.isTestMode) {
       process.exit(0);
     }

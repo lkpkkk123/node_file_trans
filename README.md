@@ -46,7 +46,7 @@ nc 127.0.0.1 3000
 ## 文件说明
 
 - `tcp-server.js` - TCP 服务器实现
-- `tcp-client.js` - TCP 客户端实现
+- `fclient.js` - TCP 客户端实现
 - `index.js` - Hello World 示例程序
 
 ## 开发环境

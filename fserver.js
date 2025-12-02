@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const logger = require('./logger');
 // 配置
 const CONFIG = {
   PORT: 3000,
@@ -52,9 +53,9 @@ function ensureUploadDir() {
     if (!fs.existsSync(realPath)) {
       try {
         fs.mkdirSync(realPath, { recursive: true });
-        console.log(`[系统] 创建上传目录: ${realPath} (虚拟路径: ${virtualPath})`);
+        logger.info(`[系统] 创建上传目录: ${realPath} (虚拟路径: ${virtualPath})`);
       } catch (err) {
-        console.error(`[系统错误] 无法创建上传目录: ${err.message}`);
+        logger.error(`[系统错误] 无法创建上传目录: ${err.message}`);
         process.exit(1);
       }
     }
@@ -112,13 +113,13 @@ class myFile {
       }
 
       this.stream.on('error', (err) => {
-        console.error(`[文件错误] ${this.filePath}: ${err.message}`);
+        logger.error(`[文件错误] ${this.filePath}: ${err.message}`);
         //this.hasError = true;
         this.cleanup();
         reject(err);
       });
       this.stream.on('open', (fd) => {
-        console.log(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
+        logger.info(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
         //this.isClosed = false;
         resolve(true);
       });
@@ -162,7 +163,7 @@ class myFile {
     if (!this.stream) return;
     
     this.stream.on('open', (fd) => {
-      console.log(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
+      logger.info(`[文件] ${this.filePath} 成功打开，文件描述符: ${fd}`);
       this.isClosed = false;
     });
 
@@ -174,7 +175,7 @@ class myFile {
     });
 
     this.stream.on('error', (err) => {
-      console.error(`[文件错误] ${this.filePath}: ${err.message}`);
+      logger.error(`[文件错误] ${this.filePath}: ${err.message}`);
       this.hasError = true;
       this.cleanup();
       
@@ -190,11 +191,11 @@ class myFile {
     });
 
     this.stream.on('finish', () => {
-      console.log(`[文件] ${this.filePath} 写入完成`);
+      logger.info(`[文件] ${this.filePath} 写入完成`);
     });
 
     this.stream.on('close', () => {
-      console.log(`[文件] ${this.filePath} 流已关闭`);
+      logger.info(`[文件] ${this.filePath} 流已关闭`);
       this.isClosed = true;
     });
   }
@@ -207,17 +208,17 @@ class myFile {
 
   write(data) {
     if (this.hasError) {
-      console.error(`[文件] ${this.filePath} 已发生错误，拒绝写入`);
+      logger.error(`[文件] ${this.filePath} 已发生错误，拒绝写入`);
       return false;
     }
 
     if (this.isClosed) {
-      console.error(`[文件] ${this.filePath} 已关闭，拒绝写入`);
+      logger.error(`[文件] ${this.filePath} 已关闭，拒绝写入`);
       return false;
     }
 
     if (!this.stream) {
-      console.error(`[文件] ${this.filePath} 流不存在`);
+      logger.error(`[文件] ${this.filePath} 流不存在`);
       return false;
     }
 
@@ -250,7 +251,7 @@ class myFile {
 
       this.stream.end(() => {
         clearTimeout(timeout);
-        console.log(`[文件] ${this.filePath} 已关闭`);
+        logger.info(`[文件] ${this.filePath} 已关闭`);
         resolve();
       });
 
@@ -271,9 +272,9 @@ class myFile {
         } else {
           this.stream.destroy();
         }
-        console.log(`[文件] ${this.filePath} 流已关闭`);
+        logger.info(`[文件] ${this.filePath} 流已关闭`);
       } catch (err) {
-        console.error(`[文件] ${this.filePath} 关闭流时出错: ${err.message}`);
+        logger.error(`[文件] ${this.filePath} 关闭流时出错: ${err.message}`);
         try {
           this.stream.destroy();
         } catch (e) {
@@ -312,7 +313,7 @@ class mySession {
     this.isPaused = false;
     this.pauseReason = null;
     
-    console.log(`[新客户端] ${this.address} 已连接`);
+    logger.info(`[新客户端] ${this.address} 已连接`);
 
     socket.setNoDelay(true);
     socket.setKeepAlive(true, 30000);
@@ -332,7 +333,7 @@ class mySession {
     this.isPaused = true;
     this.pauseReason = reason;
     this.socket.pause();
-    console.log(`[流控] ${this.address} 暂停接收 (${reason})`);
+    logger.info(`[流控] ${this.address} 暂停接收 (${reason})`);
   }
 
   resumeReceiving() {
@@ -342,7 +343,7 @@ class mySession {
     this.isPaused = false;
     this.pauseReason = null;
     this.socket.resume();
-    console.log(`[流控] ${this.address} 恢复接收`);
+    logger.info(`[流控] ${this.address} 恢复接收`);
   }
 
   resetTimeout() {
@@ -351,7 +352,7 @@ class mySession {
     }
     
     this.timeout = setTimeout(() => {
-      console.log(`[超时] ${this.address} 连接超时`);
+      logger.info(`[超时] ${this.address} 连接超时`);
       let resp = {
         type: 'error',
         message: '连接超时'
@@ -382,7 +383,7 @@ class mySession {
     
     // 检查缓冲区大小
     if (this.buffer.length + chunk.length > CONFIG.MAX_BUFFER_SIZE) {
-      console.error(`[错误] ${this.address} 缓冲区溢出`);
+      logger.error(`[错误] ${this.address} 缓冲区溢出`);
       this.notifyError('缓冲区溢出');
       setTimeout(() => {
         this.socket.end();
@@ -411,7 +412,7 @@ class mySession {
     const now = GetTickCount();
     files.forEach((file, filePath) => {
       if ((now - file.inQueueTime) > CONFIG.RESUME_TIMEOUT) {
-        console.log(`[清理] 超时未完成的断点续传文件: ${filePath}`);
+        logger.info(`[清理] 超时未完成的断点续传文件: ${filePath}`);
         file.cleanup();
         files.delete(filePath);
       }
@@ -421,7 +422,7 @@ class mySession {
     const nullIndex = this.buffer.indexOf(0);
     
     if (nullIndex === -1) {
-      console.log(`[JSON] ${this.address} 等待完整消息... (${this.buffer.length} 字节)`);
+      logger.info(`[JSON] ${this.address} 等待完整消息... (${this.buffer.length} 字节)`);
       return;
     }
     
@@ -430,7 +431,7 @@ class mySession {
     this.checkAndDelTimeOutResumeFile();
     try {
       this.jsonMessage = JSON.parse(jsonString);
-      console.log(`[JSON] ${this.address} 接收到:`, this.jsonMessage);
+      logger.info(`[JSON] ${this.address} 接收到:`, this.jsonMessage);
       
       this.handleJsonMessage(this.jsonMessage);
       
@@ -441,7 +442,7 @@ class mySession {
       }
       
     } catch (err) {
-      console.error(`[JSON错误] ${this.address} 解析失败: ${err.message}`);
+      logger.error(`[JSON错误] ${this.address} 解析失败: ${err.message}`);
       let resp = {
         type: 'error',
         message: 'JSON解析错误'
@@ -463,7 +464,7 @@ class mySession {
     //   realPath = CONFIG.UPLOAD_PATH_MAP.get(dirName);
     //   uploadDir = realPath;
     // }else{
-    //   console.error(`[错误] 虚拟路径 ${dirName} 未映射`);
+    //   logger.error(`[错误] 虚拟路径 ${dirName} 未映射`);
     //   this.notifyError(`虚拟路径 ${dirName} 未映射`);
     //   setTimeout(() => {
     //     this.socket.end();
@@ -474,7 +475,7 @@ class mySession {
 
   handleJsonMessage(msg) {
     if (msg.type === 'file') {
-      console.log(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, md5: ${msg.md5sum}`);
+      logger.info(`[文件] 文件名: ${msg.filename}, 大小: ${msg.size}, md5: ${msg.md5sum}`);
       //将msg.filename分割成路径和文件名
       //let fPath = sanitizeFilename(msg.filename);
       this.isFirstMessage = false;
@@ -493,9 +494,9 @@ class mySession {
             file.md5sum = msg.md5sum; // 更新 MD5
             file.size = msg.size; // 更新文件大小
             file.Open(startPos, fPath);
-            console.log(`[断点续传] ${fPath} 从 ${startPos} 继续`);
+            logger.info(`[断点续传] ${fPath} 从 ${startPos} 继续`);
           } else {
-            console.log('[警告] 文件名不匹配或不可续传，创建新文件');
+            logger.info('[警告] 文件名不匹配或不可续传，创建新文件');
             file = new myFile(fPath, msg.size, this, msg.md5sum, allowResume);
             file.Open(0, fPath);
             if (file.allowResume) {
@@ -521,7 +522,7 @@ class mySession {
         this.send(JSON.stringify(resp) + '\0');
         
       } catch (err) {
-        console.error(`[错误] 创建文件失败: ${err.message}`);
+        logger.error(`[错误] 创建文件失败: ${err.message}`);
         this.notifyError(err.message);
         setTimeout(() => {
           this.socket.end();
@@ -529,11 +530,11 @@ class mySession {
       }
       
     } else if (msg.type === 'text') {
-      console.log(`[文本] ${msg.content}`);
+      logger.info(`[文本] ${msg.content}`);
       this.send(`收到: ${msg.content}\n`);
       
     } else if (msg.type === 'del_file') { 
-      console.log(`[删除] 请求删除文件: ${msg.filename}`);
+      logger.info(`[删除] 请求删除文件: ${msg.filename}`);
       let fPath = mapToRealPath(msg.filename);
       fs.unlink(fPath, (err) => {
         if (err) {
@@ -543,7 +544,7 @@ class mySession {
           };
           this.send(JSON.stringify(resp) + '\0');
         } else {
-          console.log(`[删除] 文件已删除: ${fPath}`);
+          logger.info(`[删除] 文件已删除: ${fPath}`);
           const resp = {
             type: 'del_file_ack',
             message: `文件已删除: ${msg.filename}`
@@ -556,20 +557,20 @@ class mySession {
           //尝试删除空目录
           fs.rmdir(dir, { recursive: false }, (err) => {
             if (!err) {
-              console.log(`[删除] 目录已删除: ${dir}`);
+              logger.info(`[删除] 目录已删除: ${dir}`);
             }
           });
         }
 
       });
     } else {
-      console.log(`[未知类型] ${msg.type}`);
+      logger.info(`[未知类型] ${msg.type}`);
     }
   }
 
   processBinaryData() {
     if (!this.currentFile) {
-      console.error(`[错误] ${this.address} 没有当前文件对象`);
+      logger.error(`[错误] ${this.address} 没有当前文件对象`);
       return 0;
     }
     
@@ -581,20 +582,20 @@ class mySession {
       
       const writeResult = this.currentFile.write(dataToWrite);
       if (writeResult === false && !this.currentFile.isComplete()) {
-        console.error(`[错误] ${this.address} 写入失败`);
+        logger.error(`[错误] ${this.address} 写入失败`);
         return 0;
       }
       
       this.buffer = this.buffer.slice(toWrite);
-      console.log('socket buffer size=',this.buffer.length);
+      logger.info('socket buffer size=',this.buffer.length);
 
       // 定期打印进度
       const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
-      console.log(`[进度] ${this.address} ${progress}% (${this.currentFile.writtenSize}/${this.currentFile.size})`);
+      logger.info(`[进度] ${this.address} ${progress}% (${this.currentFile.writtenSize}/${this.currentFile.size})`);
     }
     
     if (this.currentFile.isComplete()) {
-      console.log(`[完成] ${this.address} 文件: ${this.currentFile.filePath}`);
+      logger.info(`[完成] ${this.address} 文件: ${this.currentFile.filePath}`);
       const finishedFile = this.currentFile;
       this.currentFile = null;
       this.isFirstMessage = true;
@@ -614,7 +615,7 @@ class mySession {
       if (file.CHECK_MD5) {
         serverMd5 = await file.computeMD5();
         checksumMatch = serverMd5 === file.md5sum;
-        console.log(`[校验] ${file.filePath} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.md5sum}`}`);
+        logger.info(`[校验] ${file.filePath} MD5=${serverMd5} ${checksumMatch ? '匹配' : `≠ 期望 ${file.md5sum}`}`);
       }
 
       const resp = {
@@ -626,7 +627,7 @@ class mySession {
       };
       this.send(JSON.stringify(resp) + '\0');
     } catch (err) {
-      console.error(`[校验错误] ${file.filePath}: ${err.message}`);
+      logger.error(`[校验错误] ${file.filePath}: ${err.message}`);
       this.notifyError('服务器校验失败: ' + err.message);
     } finally {
       if (!file.allowResume) {
@@ -638,15 +639,15 @@ class mySession {
   onError(err) {
     // 忽略常见的客户端断开错误
     if (err.code === 'ECONNRESET' || err.code === 'EPIPE') {
-      console.log(`[断开] ${this.address} 连接重置`);
+      logger.info(`[断开] ${this.address} 连接重置`);
     } else {
-      console.error(`[错误] ${this.address}: ${err.message}`);
+      logger.error(`[错误] ${this.address}: ${err.message}`);
     }
     // onClose 会自动调用，不需要重复 cleanup
   }
 
   onClose() {
-    console.log(`[断开] ${this.address} 已断开`);
+    logger.info(`[断开] ${this.address} 已断开`);
     this.cleanup();
   }
 
@@ -658,12 +659,12 @@ class mySession {
     
     // 关闭当前文件
     if (this.currentFile) {
-      console.log(`[清理] 关闭未完成的文件: ${this.currentFile.filePath}`);
+      logger.info(`[清理] 关闭未完成的文件: ${this.currentFile.filePath}`);
       
       // 如果不是断点续传模式，从 files Map 中移除
       if (!this.currentFile.allowResume && files.has(this.currentFile.filePath)) {
         files.delete(this.currentFile.filePath);
-        console.log(`[清理] 从 files Map 移除: ${this.currentFile.filePath}`);
+        logger.info(`[清理] 从 files Map 移除: ${this.currentFile.filePath}`);
       }
       
       this.currentFile.cleanup();
@@ -676,7 +677,7 @@ class mySession {
     // 从客户端列表移除
     clients.delete(this.socket);
  
-    console.log('当前连接数:', clients.size);
+    logger.info('当前连接数:', clients.size);
   }
 
   getInfo() {
@@ -694,7 +695,7 @@ class mySession {
 const server = net.createServer((socket) => {
   // 检查连接数限制
   if (clients.size >= CONFIG.MAX_CONNECTIONS) {
-    console.log(`[拒绝] 连接数已达上限: ${CONFIG.MAX_CONNECTIONS}`);
+    logger.info(`[拒绝] 连接数已达上限: ${CONFIG.MAX_CONNECTIONS}`);
     socket.write('服务器繁忙，请稍后再试\n');
     setTimeout(() => {
       socket.end();
@@ -703,11 +704,11 @@ const server = net.createServer((socket) => {
   }
   
   const clientAddress = `${socket.remoteAddress}:${socket.remotePort}`;
-  console.log(`[连接] 新客户端: ${clientAddress}`);
+  logger.info(`[连接] 新客户端: ${clientAddress}`);
 
   const client = new mySession(socket);
   clients.set(socket, client);
-  console.log(`当前连接数: ${clients.size}`);
+  logger.info(`当前连接数: ${clients.size}`);
 
   client.send('欢迎连接到文件传输服务器！\n');
 });
@@ -717,31 +718,31 @@ function startServer() {
   ensureUploadDir();
   
   server.listen(CONFIG.PORT, CONFIG.HOST, () => {
-    console.log('='.repeat(50));
-    console.log('TCP 文件传输服务器已启动');
-    console.log(`地址: ${CONFIG.HOST}:${CONFIG.PORT}`);
+    logger.info('='.repeat(50));
+    logger.info('TCP 文件传输服务器已启动');
+    logger.info(`地址: ${CONFIG.HOST}:${CONFIG.PORT}`);
     let upLoadDirs = '';
     CONFIG.UPLOAD_PATH_MAP.forEach((realPath,virtualPath) => {
       upLoadDirs += `${virtualPath} -> ${realPath}\n`;
     });
-    console.log(`上传目录: \n${upLoadDirs}`);
-    console.log(`最大连接数: ${CONFIG.MAX_CONNECTIONS}`);
-    console.log(`最大文件大小: ${(CONFIG.MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`);
-    console.log('='.repeat(50));
+    logger.info(`上传目录: \n${upLoadDirs}`);
+    logger.info(`最大连接数: ${CONFIG.MAX_CONNECTIONS}`);
+    logger.info(`最大文件大小: ${(CONFIG.MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`);
+    logger.info('='.repeat(50));
   });
 }
 
 server.on('error', (err) => {
-  console.error('服务器错误:', err.message);
+  logger.error('服务器错误:', err.message);
   if (err.code === 'EADDRINUSE') {
-    console.error(`端口 ${CONFIG.PORT} 已被占用`);
+    logger.error(`端口 ${CONFIG.PORT} 已被占用`);
   }
   process.exit(1);
 });
 
 // 优雅关闭
 process.on('SIGINT', () => {
-  console.log('\n正在关闭服务器...');
+  logger.info('\n正在关闭服务器...');
   
   // 关闭所有客户端连接
   clients.forEach((client) => {
@@ -753,13 +754,13 @@ process.on('SIGINT', () => {
   
   // 关闭服务器
   server.close(() => {
-    console.log('服务器已关闭');
+    logger.info('服务器已关闭');
     process.exit(0);
   });
   
   // 强制退出（5秒后）
   setTimeout(() => {
-    console.log('强制退出');
+    logger.info('强制退出');
     process.exit(1);
   }, 5000);
 });
