@@ -128,9 +128,6 @@ class FileUploadClient {
       const stream = fs.createReadStream(filePath);
       
       stream.on('data', (data) => {
-        if (filePath.endsWith('.m3u8')) {
-          logger.info(`md5 ${filePath} data:${data}`);
-        }
         hash.update(data);
       });
       stream.on('end', () => resolve(hash.digest('hex')));
@@ -138,10 +135,10 @@ class FileUploadClient {
     });
   }
   // 上传文件
-  delFile(serverPath) {
+  delFile(serverPaths) {
     const metadata = {
       type: 'del_file',
-      filename: serverPath
+      filenames: serverPaths
     };
     const jsonString = JSON.stringify(metadata);
     this.socket.write(TcpProtocol.packJson(jsonString));
@@ -226,9 +223,6 @@ class FileUploadClient {
     logger.info('\n开始传输文件...\n');
 
     this.currentFile.stream.on('data', (chunk) => {
-      if (this.currentFile.path.endsWith('.m3u8')) {
-        logger.info(`send ${this.currentFile.path} data:${chunk}`);
-      }
       // 检查是否可以写入
       let writeSize = Math.min(chunk.length, this.currentFile.size - this.currentFile.sent);
       if (writeSize <= 0) {

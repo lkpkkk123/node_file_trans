@@ -130,7 +130,6 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     }
   });
 
-  // 上传队列处理（递归延时，避免重叠）
   async function processUploadQueue() {
     if (pendingUploads.size > 0) {
       const filesToUpload = Array.from(pendingUploads);
@@ -158,12 +157,14 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
         logger.info('重新连接服务器...');
         await client.connect();
       }
+      let relativePaths = [];
       for (const filePath of filesToDelete) {
         logger.info(`[请求服务器删除] ${path.basename(filePath)}`);
         let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
         relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
-        client.delFile(relativePath);
+        relativePaths.push(relativePath);
       }
+      client.delFile(relativePaths);
     }
 
     // 等待1秒后再次检查队列

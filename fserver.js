@@ -377,11 +377,11 @@ class mySession {
     this.send(JSON.stringify(resp));
   }
 
-  async onData(chunk) {
+  onData(chunk) {
 
-    this.TcpProtocol.unpack(chunk, async (pack) => {
+    this.TcpProtocol.unpack(chunk, (pack) => {
       if (pack.type === TcpProtocol.TYPE_JSON) {
-        await this.handleJsonMessage(pack.data);
+        this.handleJsonMessage(pack.data);
       } else {
         const result = this.processBinaryData(pack.data);
         if (result === 0) {
@@ -483,37 +483,38 @@ class mySession {
       }
       
     } else if (msg.type === 'del_file') { 
-      logger.info(`[删除] 请求删除文件: ${msg.filename}`);
-      let fPath = mapToRealPath(msg.filename);
-      fs.unlink(fPath, (err) => {
-        if (err) {
-          const resp = {
-            type: 'del_file_ack',
-            message: `文件已删除失败: ${msg.filename}`
-          };
-          this.send(JSON.stringify(resp));
-        } else {
-          logger.info(`[删除] 文件已删除: ${fPath}`);
-
-          if (CONFIG.DELETE_EMPTY_DIR) {//尝试删除空目录
-            let dir=path.dirname(fPath);
-            //尝试删除空目录
-            fs.rmdir(dir, { recursive: false }, (err) => {
-              if (!err) {
-                logger.info(`[删除] 目录已删除: ${dir}`);
-              }
-            });
-          }
-          const resp = {
-            type: 'del_file_ack',
-            message: `文件已删除: ${msg.filename}`
-          };
-          this.send(JSON.stringify(resp));
+      logger.info(`[删除] 请求删除文件: ${JSON.stringify(msg.filenames)}`);
+      for (let i=0;i<msg.filenames.length;i++)
+      {
+        let fPath = mapToRealPath(msg.filenames[i]);
+        if (i % 5 === 0)
+        {
+          await new Promise(resolve => setTimeout(resolve, 100));//文件可能太多，稍等一下
         }
+        fs.unlink(fPath, (err) => {
+          if (err) {
+            const resp = {
+              type: 'del_file_ack',
+              message: `文件已删除失败: ${fPath}`
+            };
+            this.send(JSON.stringify(resp));
+          } else {
+            logger.info(`[删除] 文件已删除: ${fPath}`);
 
+            if (CONFIG.DELETE_EMPTY_DIR) {//尝试删除空目录
+              let dir=path.dirname(fPath);
+              //尝试删除空目录
+              fs.rmdir(dir, { recursive: false }, (err) => {
+                if (!err) {
+                  logger.info(`[删除] 目录已删除: ${dir}`);
+                }
+              });
+            }
+          }
+        });
+      }
 
-
-      });
+      
     } else {
       logger.info(`[未知类型] ${msg.type}`);
     }
