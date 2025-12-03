@@ -13,7 +13,7 @@ const CONFIG = {
 };
 
 class FileUploadClient {
-  constructor(host, port, enableResume = false, isTestMode = false) {
+  constructor(host, port, isTestMode = false) {
     this.host = host;
     this.port = port;
     this.socket = null;
@@ -21,7 +21,6 @@ class FileUploadClient {
     this.currentFile = null;
     this.isWaitingAck = false;
     this.startPos = 0;
-    this.enableResume = enableResume;
     this.lastMd5 = null;
     this.isTestMode = isTestMode;
     this.uploadComplete = null; // Promise resolver for test mode
@@ -128,7 +127,7 @@ class FileUploadClient {
       }
       
     } else if (response.type === 'error') {
-      logger.error('✗ 服务器错误:', response.message);
+      logger.error(`✗ 服务器错误: ${response.message}`);
       this.disconnect();
       if (this.uploadFailed) {
         this.uploadFailed(new Error(response.message));        
@@ -164,8 +163,9 @@ class FileUploadClient {
     this.socket.write(jsonString + '\0');
   }
   // 上传文件
-  async uploadFile(filePath,serverPath, useMd5 = false) {//serverDir不能带/
+  async uploadFile(filePath,serverPath, resumeEnable, useMd5 = false) {//serverDir不能带/
     // 检查文件是否存在
+    this.enableResume = resumeEnable;
     if (!fs.existsSync(filePath)) {
       throw new Error(`文件不存在: ${filePath}`);
     }
@@ -211,8 +211,9 @@ class FileUploadClient {
     this.lastMd5 = md5;
     
     // 发送元数据
-    logger.info('\n发送文件元数据...');
     const jsonString = JSON.stringify(metadata);
+    logger.info(`发送文件元数据 ${jsonString.length} 字节, 内容: ${jsonString}`);
+
     this.socket.write(jsonString + '\0');
     this.isWaitingAck = true;
   }
@@ -245,6 +246,14 @@ class FileUploadClient {
         logger.info(`send ${this.currentFile.path} data:${chunk}`);
       }
       // 检查是否可以写入
+      let writeSize = Math.min(chunk.length, this.currentFile.size - this.currentFile.sent);
+      if (writeSize <= 0) {
+        //结束发送
+        this.currentFile.stream.close();
+        return;
+      }
+      //发送writeSize大小的数据
+      chunk = chunk.slice(0, writeSize);
       const canWrite = this.socket.write(chunk);
       this.currentFile.sent += chunk.length;
       

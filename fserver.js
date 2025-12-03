@@ -341,21 +341,21 @@ class mySession {
   }
 
   resetTimeout() {
-    if (this.timeout) {
-      clearTimeout(this.timeout);
-    }
+    // if (this.timeout) {
+    //   clearTimeout(this.timeout);
+    // }
     
-    this.timeout = setTimeout(() => {
-      logger.info(`[超时] ${this.address} 连接超时`);
-      let resp = {
-        type: 'error',
-        message: '连接超时'
-      };
-      this.send(JSON.stringify(resp) + '\0');
-      setTimeout(() => {
-        this.socket.end();
-      }, 100);
-    }, CONFIG.CLIENT_TIMEOUT);
+    // this.timeout = setTimeout(() => {
+    //   logger.info(`[超时] ${this.address} 连接超时`);
+    //   let resp = {
+    //     type: 'error',
+    //     message: '连接超时'
+    //   };
+    //   this.send(JSON.stringify(resp) + '\0');
+    //   setTimeout(() => {
+    //     this.socket.end();
+    //   }, 100);
+    // }, CONFIG.CLIENT_TIMEOUT);
   }
 
   send(message) {
@@ -374,7 +374,7 @@ class mySession {
 
   async onData(chunk) {
     this.resetTimeout();
-    
+    logger.info(`[数据] ${this.address} 接收 ${chunk.length} 字节`);
     // 检查缓冲区大小
     if (this.buffer.length + chunk.length > CONFIG.MAX_BUFFER_SIZE) {
       logger.error(`[错误] ${this.address} 缓冲区溢出`);
@@ -602,6 +602,7 @@ class mySession {
 
   async handleCompletedFile(file) {
     try {
+      this.resumeReceiving('file finished');
       await file.close();
 
       let serverMd5 = '';
@@ -619,6 +620,7 @@ class mySession {
         expected_md5: file.md5sum,
         match: checksumMatch
       };
+      logger.info(`[完成] ${JSON.stringify(resp)} 传输完成，通知客户端`);
       this.send(JSON.stringify(resp) + '\0');
     } catch (err) {
       logger.error(`[校验错误] ${file.filePath}: ${err.message}`);

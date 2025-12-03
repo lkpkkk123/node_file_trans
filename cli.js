@@ -61,7 +61,7 @@ async function main() {
     console.log(`文件列表: ${fileList.length} 个文件`);
     console.log('按 Ctrl+C 停止测试\n');
     
-    let client = new FileUploadClient(host, port, resumeEnabled, true);
+    let client = new FileUploadClient(host, port, true);
     await client.connect();
 
     let uploadCount = 0;
@@ -75,7 +75,7 @@ async function main() {
             client.uploadComplete = resolve;
           });
           
-          await client.uploadFile(testFilePath,serverDir, md5SumEnabled);
+          await client.uploadFile(testFilePath,serverDir, resumeEnabled, md5SumEnabled);
           await uploadPromise;
           
           console.log(`[测试 #${uploadCount}] 完成\n`);
@@ -86,7 +86,7 @@ async function main() {
         } catch (err) {
           console.error(`\n✗ 测试错误 (#${uploadCount}):`, err.message);
           console.log('重新连接...');
-          client = new FileUploadClient(host, port, resumeEnabled, true);
+          client = new FileUploadClient(host, port, true);
           await client.connect();
         }
       }
@@ -100,10 +100,10 @@ async function main() {
   console.log('='.repeat(50));
 
   try {
-    const client = new FileUploadClient(host, port, resumeEnabled, false);
+    const client = new FileUploadClient(host, port, false);
     await client.connect();
     let serverPath=serverDir+path.sep+path.basename(filePath);
-    await client.uploadFile(filePath,serverPath, md5SumEnabled);
+    await client.uploadFile(filePath,serverPath, resumeEnabled, md5SumEnabled);
   } catch (err) {
     console.error('\n✗ 错误:', err.message);
     process.exit(1);

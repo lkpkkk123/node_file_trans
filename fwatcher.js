@@ -37,7 +37,6 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   const client = new FileUploadClient(
     CONFIG.SERVER_HOST,
     CONFIG.SERVER_PORT,
-    CONFIG.ENABLE_RESUME,
     true,  // 不是测试模式
     CONFIG.ENABLE_MD5,
     CONFIG.VIRTUAL_DIR
@@ -81,7 +80,15 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       }
       let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
       relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
-      await client.uploadFile(filePath, relativePath, CONFIG.ENABLE_MD5);
+      let resumeEnabled = CONFIG.ENABLE_RESUME;
+      if (resumeEnabled) {
+        const ext = path.extname(fileName).toLowerCase();
+        if (CONFIG.FILE_DISABLE_RESUME.includes(ext)) {
+          resumeEnabled = false;
+          //logger.info(`[提示] ${fileName} 的扩展名在不支持断点续传列表中，禁用断点续传`);
+        }
+      }
+      await client.uploadFile(filePath, relativePath, resumeEnabled, CONFIG.ENABLE_MD5);
       await uploadPromise;
       
       logger.info(`[完成] ${fileName} 上传成功\n`);
@@ -118,7 +125,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     persistent: true,
     ignoreInitial: true,  // 忽略初始扫描的文件
     awaitWriteFinish: {
-      stabilityThreshold: 2000,  // 文件2秒内没有变化才认为写入完成
+      stabilityThreshold: 100,  // 文件2秒内没有变化才认为写入完成
       pollInterval: 100
     }
   });
