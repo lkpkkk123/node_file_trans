@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const logger = require('./logger');
+const TcpProtocol = require('./tcp_protocol');
 const createLog=require('./logger').create;
 const { ServerConfig: CONFIG } = require('./cfg.js');
 createLog('server');
@@ -227,7 +228,11 @@ class myFile {
   }
 
   isComplete() {
-    return this.writtenSize >= this.size;
+    if (this.writtenSize > this.size)
+    {
+      throw new Error(`写入大小超过预期: ${this.writtenSize} > ${this.size}`);
+    }
+    return this.writtenSize == this.size;
   }
 
   async close() {
@@ -299,7 +304,7 @@ class mySession {
     this.address = `${socket.remoteAddress}:${socket.remotePort}`;
     this.connectTime = new Date();
     this.messageCount = 0;
-    this.buffer = Buffer.alloc(0);
+    this.TcpProtocol = new TcpProtocol();
     this.isFirstMessage = true;
     this.jsonMessage = null;
     this.currentFile = null;
@@ -360,7 +365,7 @@ class mySession {
 
   send(message) {
     if (!this.socket.destroyed) {
-      this.socket.write(message);
+      this.socket.write(TcpProtocol.packJson(message));
     }
   }
 
@@ -369,36 +374,25 @@ class mySession {
       type: 'error',
       message: message
     };
-    this.send(JSON.stringify(resp) + '\0');
+    this.send(JSON.stringify(resp));
   }
 
   async onData(chunk) {
-    this.resetTimeout();
-    logger.info(`[数据] ${this.address} 接收 ${chunk.length} 字节`);
-    // 检查缓冲区大小
-    if (this.buffer.length + chunk.length > CONFIG.MAX_BUFFER_SIZE) {
-      logger.error(`[错误] ${this.address} 缓冲区溢出`);
-      this.notifyError('缓冲区溢出');
-      setTimeout(() => {
-        this.socket.end();
-      }, 100);
-      return;
-    }
-    
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    
-    if (this.isFirstMessage) {
-      await this.processJsonMessage();
-    } else {
-      const result = this.processBinaryData();
-      if (result === 0) {
-        this.notifyError('文件写入失败');
+
+    this.TcpProtocol.unpack(chunk, async (pack) => {
+      if (pack.type === TcpProtocol.TYPE_JSON) {
+        await this.handleJsonMessage(pack.data);
+      } else {
+        const result = this.processBinaryData(pack.data);
+        if (result === 0) {
+          this.notifyError('文件写入失败');
           
-        setTimeout(() => {
-          this.socket.end();
-        }, 1000);
+          setTimeout(() => {
+            this.socket.end();
+          }, 1000);
+        }
       }
-    }
+    });
   }
 
   checkAndDelTimeOutResumeFile()
@@ -411,41 +405,6 @@ class mySession {
         files.delete(filePath);
       }
     });
-  }
-  async processJsonMessage() {
-    const nullIndex = this.buffer.indexOf(0);
-    
-    if (nullIndex === -1) {
-      logger.info(`[JSON] ${this.address} 等待完整消息... (${this.buffer.length} 字节)`);
-      return;
-    }
-    
-    const jsonBuffer = this.buffer.slice(0, nullIndex);
-    const jsonString = jsonBuffer.toString('utf8');
-    this.checkAndDelTimeOutResumeFile();
-    try {
-      this.jsonMessage = JSON.parse(jsonString);
-      logger.info(`[JSON] ${this.address} 接收到:${jsonString}`);
-      
-      await this.handleJsonMessage(this.jsonMessage);
-      
-      this.buffer = this.buffer.slice(nullIndex + 1);
-      
-      if (this.buffer.length > 0) {
-        this.processBinaryData();
-      }
-      
-    } catch (err) {
-      logger.error(`[JSON错误] ${this.address} 解析失败: ${err.message}`);
-      let resp = {
-        type: 'error',
-        message: 'JSON解析错误'
-      };
-      this.send(JSON.stringify(resp) + '\0');
-      setTimeout(() => {
-        this.socket.end();
-      }, 100);
-    }
   }
 
   mapToRealPath(clientFileName)
@@ -513,7 +472,7 @@ class mySession {
           type: 'ack_file_ready',
           start_pos: startPos
         };
-        this.send(JSON.stringify(resp) + '\0');
+        this.send(JSON.stringify(resp));
         
       } catch (err) {
         logger.error(`[错误] 创建文件失败: ${err.message}`);
@@ -522,10 +481,6 @@ class mySession {
           this.socket.end();
         }, 100);
       }
-      
-    } else if (msg.type === 'text') {
-      logger.info(`[文本] ${msg.content}`);
-      this.send(`收到: ${msg.content}\n`);
       
     } else if (msg.type === 'del_file') { 
       logger.info(`[删除] 请求删除文件: ${msg.filename}`);
@@ -536,25 +491,27 @@ class mySession {
             type: 'del_file_ack',
             message: `文件已删除失败: ${msg.filename}`
           };
-          this.send(JSON.stringify(resp) + '\0');
+          this.send(JSON.stringify(resp));
         } else {
           logger.info(`[删除] 文件已删除: ${fPath}`);
+
+          if (CONFIG.DELETE_EMPTY_DIR) {//尝试删除空目录
+            let dir=path.dirname(fPath);
+            //尝试删除空目录
+            fs.rmdir(dir, { recursive: false }, (err) => {
+              if (!err) {
+                logger.info(`[删除] 目录已删除: ${dir}`);
+              }
+            });
+          }
           const resp = {
             type: 'del_file_ack',
             message: `文件已删除: ${msg.filename}`
           };
-          this.send(JSON.stringify(resp) + '\0');
+          this.send(JSON.stringify(resp));
         }
 
-        if (CONFIG.DELETE_EMPTY_DIR) {
-          let dir=path.dirname(fPath);
-          //尝试删除空目录
-          fs.rmdir(dir, { recursive: false }, (err) => {
-            if (!err) {
-              logger.info(`[删除] 目录已删除: ${dir}`);
-            }
-          });
-        }
+
 
       });
     } else {
@@ -562,31 +519,22 @@ class mySession {
     }
   }
 
-  processBinaryData() {
+  processBinaryData(data) {
     if (!this.currentFile) {
       logger.error(`[错误] ${this.address} 没有当前文件对象`);
       return 0;
     }
     
-    const remaining = this.currentFile.size - this.currentFile.writtenSize;
-    const toWrite = Math.min(this.buffer.length, remaining);
-    
-    if (toWrite > 0) {
-      const dataToWrite = this.buffer.slice(0, toWrite);
-      
-      const writeResult = this.currentFile.write(dataToWrite);
-      if (writeResult === false && !this.currentFile.isComplete()) {
-        logger.error(`[错误] ${this.address} 写入失败`);
-        return 0;
-      }
-      
-      this.buffer = this.buffer.slice(toWrite);
-      logger.info('socket buffer size='+this.buffer.length);
-
-      // 定期打印进度
-      const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
-      logger.info(`[进度] ${this.address} ${progress}% (${this.currentFile.writtenSize}/${this.currentFile.size})`);
+    const writeResult = this.currentFile.write(data);
+    if (writeResult === false && !this.currentFile.isComplete()) {
+      logger.error(`[错误] ${this.address} 写入失败`);
+      return 0;
     }
+
+    // 定期打印进度
+    const progress = (this.currentFile.writtenSize / this.currentFile.size * 100).toFixed(1);
+    logger.info(`[进度] ${this.address} ${progress}% (${this.currentFile.writtenSize}/${this.currentFile.size})`);
+    
     
     if (this.currentFile.isComplete()) {
       logger.info(`[完成] ${this.address} 文件: ${this.currentFile.filePath}`);
@@ -621,7 +569,7 @@ class mySession {
         match: checksumMatch
       };
       logger.info(`[完成] ${JSON.stringify(resp)} 传输完成，通知客户端`);
-      this.send(JSON.stringify(resp) + '\0');
+      this.send(JSON.stringify(resp));
     } catch (err) {
       logger.error(`[校验错误] ${file.filePath}: ${err.message}`);
       this.notifyError('服务器校验失败: ' + err.message);
@@ -667,9 +615,6 @@ class mySession {
       this.currentFile = null;
     }
     
-    // 清理缓冲区
-    this.buffer = Buffer.alloc(0);
-    
     // 从客户端列表移除
     clients.delete(this.socket);
  
@@ -681,7 +626,7 @@ class mySession {
       address: this.address,
       connectTime: this.connectTime,
       messageCount: this.messageCount,
-      bufferSize: this.buffer.length,
+      bufferSize: this.TcpProtocol.getBufferCapacity(),
       currentFile: this.currentFile ? this.currentFile.filePath : null
     };
   }
@@ -692,7 +637,6 @@ const server = net.createServer((socket) => {
   // 检查连接数限制
   if (clients.size >= CONFIG.MAX_CONNECTIONS) {
     logger.info(`[拒绝] 连接数已达上限: ${CONFIG.MAX_CONNECTIONS}`);
-    socket.write('服务器繁忙，请稍后再试\n');
     setTimeout(() => {
       socket.end();
     }, 100);
@@ -706,7 +650,7 @@ const server = net.createServer((socket) => {
   clients.set(socket, client);
   logger.info(`当前连接数: ${clients.size}`);
 
-  client.send('欢迎连接到文件传输服务器！\n');
+  //client.send('欢迎连接到文件传输服务器！\n');
 });
 
 // 启动服务器
@@ -742,7 +686,7 @@ process.on('SIGINT', () => {
   
   // 关闭所有客户端连接
   clients.forEach((client) => {
-    client.send('服务器正在关闭\n');
+    //client.send('服务器正在关闭\n');
     setTimeout(() => {
       client.socket.end();
     }, 100);

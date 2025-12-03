@@ -2,6 +2,8 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+//引入 TcpProtocol
+const TcpProtocol = require('./tcp_protocol');
 const logger = require('./logger');
 const createLog=require('./logger').create;
 createLog('client');
@@ -17,7 +19,7 @@ class FileUploadClient {
     this.host = host;
     this.port = port;
     this.socket = null;
-    this.buffer = Buffer.alloc(0);
+    this.tcpProtocol = new TcpProtocol();
     this.currentFile = null;
     this.isWaitingAck = false;
     this.startPos = 0;
@@ -53,34 +55,16 @@ class FileUploadClient {
 
   // 处理服务器响应
   onData(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    
-    // 查找 JSON 消息（以 \0 结尾）
-    const nullIndex = this.buffer.indexOf(0);
-    if (nullIndex !== -1) {
-      const jsonBuffer = this.buffer.slice(0, nullIndex);
-      const jsonString = jsonBuffer.toString('utf8');
-      
-      try {
-        const response = JSON.parse(jsonString);
-        this.handleResponse(response);
-        this.buffer = this.buffer.slice(nullIndex + 1);
-      } catch (err) {
-        // 不是 JSON，可能是文本消息
-        const textMsg = this.buffer.slice(0, nullIndex).toString('utf8');
-        logger.info(`服务器消息:${textMsg}`);
-        this.buffer = this.buffer.slice(nullIndex + 1);
-      }
-    } else if (this.buffer.length > 0) {
-      // 没有 \0，可能是普通文本消息
-      const lines = this.buffer.toString('utf8').split('\n');
-      for (let i = 0; i < lines.length - 1; i++) {
-        if (lines[i].trim()) {
-          logger.info(`服务器消息: ${lines[i]}`);
+    try {
+      this.tcpProtocol.unpack(chunk, (pack) => {
+        if (pack.type === TcpProtocol.TYPE_JSON) {
+          this.handleResponse(pack.data);
+        } else {
+          logger.info(`服务器消息: 接收 ${pack.data.length} 字节二进制数据`);
         }
-      }
-      // 保留最后一行（可能不完整）
-      this.buffer = Buffer.from(lines[lines.length - 1]);
+      });
+    } catch (err) {
+      logger.error('✗ 解析数据包错误:', err.message);
     }
   }
 
@@ -160,7 +144,7 @@ class FileUploadClient {
       filename: serverPath
     };
     const jsonString = JSON.stringify(metadata);
-    this.socket.write(jsonString + '\0');
+    this.socket.write(TcpProtocol.packJson(jsonString));
   }
   // 上传文件
   async uploadFile(filePath,serverPath, resumeEnable, useMd5 = false) {//serverDir不能带/
@@ -214,7 +198,7 @@ class FileUploadClient {
     const jsonString = JSON.stringify(metadata);
     logger.info(`发送文件元数据 ${jsonString.length} 字节, 内容: ${jsonString}`);
 
-    this.socket.write(jsonString + '\0');
+    this.socket.write(TcpProtocol.packJson(jsonString));
     this.isWaitingAck = true;
   }
 
@@ -254,7 +238,7 @@ class FileUploadClient {
       }
       //发送writeSize大小的数据
       chunk = chunk.slice(0, writeSize);
-      const canWrite = this.socket.write(chunk);
+      const canWrite = this.socket.write(TcpProtocol.packBinary(chunk));
       this.currentFile.sent += chunk.length;
       
       // 显示进度
