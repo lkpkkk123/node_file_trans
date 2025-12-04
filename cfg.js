@@ -16,7 +16,7 @@ const ServerConfig = {
 // 配置
 const WatcherConfig = {
   WATCH_DIR: process.argv[2] || '/home/likp/watch_uploads',  // 监听目录
-  SERVER_HOST: process.argv[3] || '127.0.0.1',
+  SERVER_HOST: process.argv[3] || '192.168.8.78',
   SERVER_PORT: parseInt(process.argv[4]) || 3000,
   ENABLE_RESUME: true,
   ENABLE_MD5: false,
