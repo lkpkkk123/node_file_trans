@@ -7,6 +7,7 @@ const logger = require('./logger');
 const TcpProtocol = require('./tcp_protocol');
 const createLog=require('./logger').create;
 const { ServerConfig: CONFIG } = require('./cfg.js');
+const { dir } = require('console');
 createLog('server');
 
 // 获取系统运行毫秒数
@@ -407,23 +408,56 @@ class mySession {
     });
   }
 
-  mapToRealPath(clientFileName)
-  {
-    const baseName = path.basename(clientFileName);
-    const dirName = path.dirname(clientFileName);
-    const firstLevelDir = dirName.split(path.sep)[0];
-    let realPath = null;
-    // if(CONFIG.UPLOAD_PATH_MAP.has(firstLevelDir)){
-    //   realPath = CONFIG.UPLOAD_PATH_MAP.get(dirName);
-    //   uploadDir = realPath;
-    // }else{
-    //   logger.error(`[错误] 虚拟路径 ${dirName} 未映射`);
-    //   this.notifyError(`虚拟路径 ${dirName} 未映射`);
-    //   setTimeout(() => {
-    //     this.socket.end();
-    //   }, 100);
-    //   return;
-    // }
+  //递归删除空目录
+  async DeleteDirectoryEmpty(dirPath){
+    try {
+      const items = fs.readdirSync(dirPath);
+      
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const stat = fs.statSync(itemPath);
+        
+        if (stat.isFile()) {
+          // 发现文件，目录不是空的
+          return false;
+        } else if (stat.isDirectory()) {
+          // 递归检查子目录
+          if (!this.DeleteDirectoryEmpty(itemPath)) {
+            return false;
+          }
+        }
+      }
+      // 所有检查都通过，目录完全为空
+      await fs.promises.rm(dirPath, { recursive: true, force: true });
+      logger.info(`[删除] 空目录已删除: ${dirPath}`);
+      return true;
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return true; // 目录不存在也算"空"
+      }
+      throw err;
+    }
+  }
+
+  async DelFileBatch(filenames) {
+    let promises = filenames.map(filename => { 
+      return new Promise(resolve  => {
+        fs.unlink(filename, (err) => {
+          if (err) {
+            const resp = {
+              type: 'del_file_ack',
+              message: `文件已删除失败: ${filename}`
+            };
+            this.send(JSON.stringify(resp));
+            resolve(false);
+          } else {
+            logger.info(`[删除] 文件已删除: ${filename}`);
+            resolve(true);
+          }
+        });
+      });
+    });
+    await Promise.all(promises);
   }
 
   async handleJsonMessage(msg) {
@@ -484,37 +518,51 @@ class mySession {
       
     } else if (msg.type === 'del_file') { 
       logger.info(`[删除] 请求删除文件: ${JSON.stringify(msg.filenames)}`);
+
+      const batchSize = 10;//每次删除10个文件
+      let batchArray = [];
+      let dirArray = new Set();
+      let count = 0;
       for (let i=0;i<msg.filenames.length;i++)
       {
         let fPath = mapToRealPath(msg.filenames[i]);
-        if (i % 5 === 0)
+        dirArray.add(path.dirname(fPath));
+        batchArray.push(fPath);
+        if (batchArray.length >= batchSize || i === msg.filenames.length - 1)
         {
-          await new Promise(resolve => setTimeout(resolve, 100));//文件可能太多，稍等一下
+          logger.info(`按批次删除文件: ${count++}`);
+          await this.DelFileBatch(batchArray);
+          batchArray = [];
         }
-        fs.unlink(fPath, (err) => {
-          if (err) {
-            const resp = {
-              type: 'del_file_ack',
-              message: `文件已删除失败: ${fPath}`
-            };
-            this.send(JSON.stringify(resp));
-          } else {
-            logger.info(`[删除] 文件已删除: ${fPath}`);
+      }
+      //将dirArray按长度排序后放到数组
+      if (CONFIG.DELETE_EMPTY_DIR)
+      {
+        let dirList = Array.from(dirArray);
+        dirList.sort((a, b) => a.length - b.length);
+        let waitForDelDir = [];
 
-            if (CONFIG.DELETE_EMPTY_DIR) {//尝试删除空目录
-              let dir=path.dirname(fPath);
-              //尝试删除空目录
-              fs.rmdir(dir, { recursive: false }, (err) => {
-                if (!err) {
-                  logger.info(`[删除] 目录已删除: ${dir}`);
-                }
-              });
+        //尝试删除空目录
+        let IsMyChildDir = oneDir => { 
+          for (let parentDir of waitForDelDir) {
+            if (oneDir.startsWith(parentDir + path.sep)) {
+              return true;
             }
           }
-        });
+          return false;
+        };
+        for (let dirPath of dirList)
+        {
+          if(!IsMyChildDir(dirPath))
+          {
+            waitForDelDir.push(dirPath);
+          }
+        }
+        for (let dirPath of waitForDelDir)
+        {
+          await this.DeleteDirectoryEmpty(dirPath);
+        }
       }
-
-      
     } else {
       logger.info(`[未知类型] ${msg.type}`);
     }

@@ -203,7 +203,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     }
 
     if( pendingDeletes.size > 0) {
-      const filesToDelete = Array.from(pendingDeletes);
+      let filesToDelete = Array.from(pendingDeletes);
       pendingDeletes.clear();
 
       // 使用第一个客户端处理删除请求
@@ -212,13 +212,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
         logger.info('重新连接服务器...');
         await clients[index].client.connect();
       }
-      let relativePaths = [];
-      for (const filePath of filesToDelete) {
-        logger.info(`[请求服务器删除] ${path.basename(filePath)}`);
+      let relativePaths = filesToDelete.map((filePath) => {
         let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
         relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
-        relativePaths.push(relativePath);
-      }
+        return  relativePath;
+      });
       clients[index].client.delFile(relativePaths);
     }
 
@@ -260,6 +258,9 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     const fileName = path.basename(filePath);
     logger.info(`[删除] ${fileName} - 文件已被删除`);
     pendingDeletes.add(filePath);
+  });
+  watcher.on('unlinkDir', (path) => {
+    console.log(`[目录删除] ${path}`);
   });
 
   // 监听错误

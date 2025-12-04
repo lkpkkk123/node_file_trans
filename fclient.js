@@ -5,6 +5,7 @@ const crypto = require('crypto');
 //引入 TcpProtocol
 const TcpProtocol = require('./tcp_protocol');
 const logger = require('./logger');
+const { log } = require('console');
 const createLog=require('./logger').create;
 createLog('client');
 // 配置
@@ -141,6 +142,7 @@ class FileUploadClient {
       filenames: serverPaths
     };
     const jsonString = JSON.stringify(metadata);
+    logger.info(`发送删除文件请求 ${jsonString.length} 字节, 内容: ${jsonString}`);
     this.socket.write(TcpProtocol.packJson(jsonString));
   }
   // 上传文件
