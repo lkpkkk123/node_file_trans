@@ -32,7 +32,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
 }
 
 // 主函数
-(async function main() {
+async function RunWatcher() {
   // 创建两个客户端实例以提高带宽利用率
   const clients = [];
   for(let i=0;i<1;i++)
@@ -298,4 +298,12 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     logger.error('[未处理的 Promise 拒绝]', reason);
   });
 
-})(); // 结束 async main()
+}
+//判断不是模块被引入才执行
+if (require.main === module) {
+  RunWatcher(); //
+}
+//导出 RunWatcher 以便外部调用
+module.exports = {
+  RunWatcher
+};

@@ -755,5 +755,9 @@ process.on('SIGINT', () => {
 
 
 
-// 启动
-startServer();
+if (require.main === module) {
+  startServer();
+}
+module.exports = {
+  startServer
+};

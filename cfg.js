@@ -1,6 +1,4 @@
 const fs = require('fs');
-const path = require('path');
-
 // 默认服务器配置
 const DefaultServerConfig = {
   PORT: 3000,
@@ -66,11 +64,6 @@ const watcherConfigPath = 'fwatcher_cfg.json';
 // 加载配置
 let ServerConfig = loadConfig(serverConfigPath, DefaultServerConfig);
 let WatcherConfig = loadConfig(watcherConfigPath, DefaultWatcherConfig);
-
-// 处理命令行参数覆盖（仅对 WatcherConfig）
-if (process.argv[2]) WatcherConfig.WATCH_DIR = process.argv[2];
-if (process.argv[3]) WatcherConfig.SERVER_HOST = process.argv[3];
-if (process.argv[4]) WatcherConfig.SERVER_PORT = parseInt(process.argv[4]);
 
 // 将 UPLOAD_PATH_MAP 数组转换为 Map
 if (Array.isArray(ServerConfig.UPLOAD_PATH_MAP)) {
