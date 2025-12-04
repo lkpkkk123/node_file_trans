@@ -60,8 +60,8 @@ function loadConfig(configPath, defaultConfig) {
 }
 
 // 配置文件路径
-const serverConfigPath = path.join(__dirname, 'fserver_cfg.json');
-const watcherConfigPath = path.join(__dirname, 'fwatcher_cfg.json');
+const serverConfigPath = 'fserver_cfg.json';
+const watcherConfigPath = 'fwatcher_cfg.json';
 
 // 加载配置
 let ServerConfig = loadConfig(serverConfigPath, DefaultServerConfig);
