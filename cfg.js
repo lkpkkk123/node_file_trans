@@ -25,6 +25,7 @@ const WatcherConfig = {
   SYNC_DELETE_FILE: true,  // 同步删除的文件
   DELETE_ON_SUCCESS: false,  // 上传成功后删除本地文件
   FILE_DISABLE_RESUME: ['.m3u8'], // 不支持断点续传的文件列表
+  STABILITY_THRESHOLD: 2000, // 文件稳定时间，单位毫秒
 };
 
 module.exports = {

@@ -195,8 +195,8 @@ class TcpProtocol {
         throw new Error(`JSON 解析错误: ${err.message}`);
       }
     } else if (dataType === TcpProtocol.TYPE_BINARY) {
-      // 二进制数据 - 使用 slice（零拷贝）
-      data = this.buffer.slice(dataStart, dataEnd);
+      // 二进制数据 - 必须拷贝，因为 buffer 会被复用
+      data = Buffer.from(this.buffer.slice(dataStart, dataEnd));
     } else {
       throw new Error(`未知的数据类型: ${dataType}`);
     }

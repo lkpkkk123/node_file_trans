@@ -9,7 +9,6 @@ createLog('watcher');
 
 const { WatcherConfig: CONFIG } = require('./cfg.js');
 
-
 // 正在上传的文件集合
 //const uploadingFiles = new Set();
 const pendingUploads = new Set();  // 延迟上传队列
@@ -34,25 +33,57 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
 
 // 主函数
 (async function main() {
-  const client = new FileUploadClient(
-    CONFIG.SERVER_HOST,
-    CONFIG.SERVER_PORT,
-    true,  // 不是测试模式
-    CONFIG.ENABLE_MD5,
-    CONFIG.VIRTUAL_DIR
-  );
-  try {
-    await client.connect();
-  } catch (err) {
-    logger.error('✗ 无法连接到服务器，退出程序');
-    // 等待日志写入
-    await new Promise(resolve => setTimeout(resolve, 100));
-    process.exit(1);
+  // 创建两个客户端实例以提高带宽利用率
+  const clients = [];
+  for(let i=0;i<1;i++)
+  {
+    clients.push({
+      client:new FileUploadClient(
+        CONFIG.SERVER_HOST,
+        CONFIG.SERVER_PORT,
+        true,  // 不是测试模式
+        CONFIG.ENABLE_MD5,
+        CONFIG.VIRTUAL_DIR
+      ),
+      file_queue: [],
+    });
+  }
+  
+  // 连接所有客户端
+  for (let i = 0; i < clients.length; i++) {
+    try {
+      logger.info(`正在连接客户端 ${i + 1}...`);
+      await clients[i].client.connect();
+      logger.info(`✓ 客户端 ${i + 1} 已连接`);
+    } catch (err) {
+      logger.error(`✗ 客户端 ${i + 1} 无法连接到服务器，退出程序`);
+      // 等待日志写入
+      await new Promise(resolve => setTimeout(resolve, 100));
+      process.exit(1);
+    }
+  }
+  
+  // 获取下一个可用的客户端
+  function getNextClient() {
+    let minIndex = 0;
+    let minQueueLen = Number.MAX_SAFE_INTEGER;
+    for (let i = 0; i < clients.length; i++) {
+      if (clients[i].file_queue.length < minQueueLen) {
+        if (clients[i].file_queue.length === 0)
+        {
+          return i;
+        }
+        minIndex = i;
+        minQueueLen = clients[i].file_queue.length;
+      }
+    }
+    return minIndex;
   }
 
   // 上传文件函数
-  async function uploadFile(filePath) {
+  async function uploadFile(filePath, clientIdx) {
     const fileName = path.basename(filePath);
+    const client = clients[clientIdx].client;
     
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
@@ -68,14 +99,14 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     }
 
     try {
-      logger.info(`\n[上传] ${fileName} (${formatSize(stats.size)})`);
+      logger.info(`\n[上传] ${fileName} (${formatSize(stats.size)}) - 客户端 ${clientIdx + 1}`);
       
       const uploadPromise = new Promise((resolve, reject) => {
         client.uploadComplete = resolve;
         client.uploadFailed = reject;
       });
       if(!client.isConnected()) {
-        logger.info('重新连接服务器...');
+        logger.info(`客户端 ${clientIdx + 1} 重新连接服务器...`);
         await client.connect();
       }
       let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
@@ -91,11 +122,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
       await client.uploadFile(filePath, relativePath, resumeEnabled, CONFIG.ENABLE_MD5);
       await uploadPromise;
       
-      logger.info(`[完成] ${fileName} 上传成功\n`);
+      logger.info(`[完成] ${fileName} 上传成功 - 客户端 ${clientIdx + 1}\n`);
       return true;
       
     } catch (err) {
-      logger.error(`[失败] ${fileName} 上传失败: ${err.message}\n`);
+      logger.error(`[失败] ${fileName} 上传失败 - 客户端 ${clientIdx + 1}: ${err.message}\n`);
       return false;
     }
   }
@@ -109,10 +140,20 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
   }
 
-  function addToList(filePath) {
-    if (pendingUploads.size > 200)
+  function addToClientList(filePath) {
+    let index = getNextClient();
+    if (clients[index].file_queue.length > 100000)
     {
-      logger.info('[警告] 待上传文件过多>200,丢弃文件 ' + filePath);
+      logger.info('[警告] 待上传文件过多>100000,丢弃文件 ' + filePath);
+      return;
+    }
+    clients[index].file_queue.push(filePath);
+    logger.info(`客户端 ${index + 1} 上传文件队列添加 当前大小: ${clients[index].file_queue.length}`);
+  }
+  function addToList(filePath) {
+    if (pendingUploads.size > 100000)
+    {
+      logger.info('[警告] 待上传文件过多>100000,丢弃文件 ' + filePath);
       return;
     }
     pendingUploads.add(filePath);
@@ -125,37 +166,51 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
     persistent: true,
     ignoreInitial: true,  // 忽略初始扫描的文件
     awaitWriteFinish: {
-      stabilityThreshold: 100,  // 文件2秒内没有变化才认为写入完成
+      stabilityThreshold: CONFIG.STABILITY_THRESHOLD || 100,  // 文件2秒内没有变化才认为写入完成
       pollInterval: 100
     }
   });
 
+  async function  processClientUpload(clientIndex){
+    //使用 Promise.all 并行上传文件到不同客户端
+    while(clients[clientIndex].file_queue.length>0)
+    {
+      let filePath = clients[clientIndex].file_queue.shift();
+      let succ = await uploadFile(filePath, clientIndex);
+      if (succ && CONFIG.DELETE_ON_SUCCESS) {
+        fs.unlink(filePath, (err) => {
+          if (err) {
+            logger.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
+          } else {
+            logger.info(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
+          }
+        });
+      }
+    }
+    setTimeout(async () => {
+      await processClientUpload(clientIndex);
+    }, 100);
+  }
   async function processUploadQueue() {
     if (pendingUploads.size > 0) {
       const filesToUpload = Array.from(pendingUploads);
       pendingUploads.clear();
       
-      for (const filePath of filesToUpload) {
-        let succ=await uploadFile(filePath);
-        if (succ && CONFIG.DELETE_ON_SUCCESS) {
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              logger.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
-            } else {
-              logger.info(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
-            }
-          });
-        }
+      for(const filePath of filesToUpload) {
+        addToClientList(filePath);
       }
+
     }
 
     if( pendingDeletes.size > 0) {
       const filesToDelete = Array.from(pendingDeletes);
       pendingDeletes.clear();
 
-      if(!client.isConnected()) {
+      // 使用第一个客户端处理删除请求
+      let index = getNextClient();
+      if(!clients[index].client.isConnected()) {
         logger.info('重新连接服务器...');
-        await client.connect();
+        await clients[index].client.connect();
       }
       let relativePaths = [];
       for (const filePath of filesToDelete) {
@@ -164,7 +219,7 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
         relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
         relativePaths.push(relativePath);
       }
-      client.delFile(relativePaths);
+      clients[index].client.delFile(relativePaths);
     }
 
     // 等待1秒后再次检查队列
@@ -173,6 +228,11 @@ if (!fs.existsSync(CONFIG.WATCH_DIR)) {
   
   // 启动队列处理
   processUploadQueue();
+
+  for(let i=0;i<clients.length;i++)
+  {
+    await processClientUpload(i);
+  }
 
   // 监听文件添加事件（文件写入完成）
   watcher.on('add', (filePath) => {

@@ -230,6 +230,9 @@ class FileUploadClient {
         this.currentFile.stream.close();
         return;
       }
+
+      
+
       //发送writeSize大小的数据
       chunk = chunk.slice(0, writeSize);
       const canWrite = this.socket.write(TcpProtocol.packBinary(chunk));
@@ -249,25 +252,33 @@ class FileUploadClient {
       }
     });
 
-    // 监听 drain 事件，恢复读取
-    this.socket.on('drain', () => {
+    // 监听 drain 事件，恢复读取（使用 on 而不是 once，因为可能触发多次）
+    const drainHandler = () => {
       if (this.currentFile && this.currentFile.stream) {
         this.currentFile.stream.resume();
       }
-    });
+    };
+    this.socket.on('drain', drainHandler);
 
     this.currentFile.stream.on('end', () => {
+      // 移除 drain 监听器，防止内存泄漏
+      this.socket.removeListener('drain', drainHandler);
+      
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       const avgSpeed = this.calculateSpeed(this.currentFile.sent - this.startPos, Date.now() - startTime);
-      
       logger.info('\n✓ 文件发送完成');
       logger.info(`总用时: ${duration} 秒`);
       logger.info(`平均速度: ${avgSpeed}`);
       logger.info('\n等待服务器确认...');
+
     });
 
     this.currentFile.stream.on('error', (err) => {
+      // 移除 drain 监听器
+      this.socket.removeListener('drain', drainHandler);
+      
       logger.error('✗ 读取文件错误:', err.message);
+      this.isUploading = false; // 释放锁
       this.disconnect();
       if (this.uploadFailed) {
         this.uploadFailed(err);        
