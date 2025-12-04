@@ -1,0 +1,15 @@
+{
+  "WATCH_DIR": "/home/likp/watch_uploads",
+  "SERVER_HOST": "192.168.8.78",
+  "SERVER_PORT": 3000,
+  "ENABLE_RESUME": true,
+  "ENABLE_MD5": false,
+  "VIRTUAL_DIR": "uploads",
+  "SYNC_INTERVAL": 5000,
+  "SYNC_DELETE_FILE": true,
+  "DELETE_ON_SUCCESS": false,
+  "FILE_DISABLE_RESUME": [
+    ".m3u8"
+  ],
+  "STABILITY_THRESHOLD": 2000
+}

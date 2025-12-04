@@ -1,11 +1,9 @@
 const net = require('net');
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 //引入 TcpProtocol
 const TcpProtocol = require('./tcp_protocol');
 const logger = require('./logger');
-const { log } = require('console');
 const createLog=require('./logger').create;
 createLog('client');
 // 配置

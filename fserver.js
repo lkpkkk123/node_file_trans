@@ -7,7 +7,6 @@ const logger = require('./logger');
 const TcpProtocol = require('./tcp_protocol');
 const createLog=require('./logger').create;
 const { ServerConfig: CONFIG } = require('./cfg.js');
-const { dir } = require('console');
 createLog('server');
 
 // 获取系统运行毫秒数
