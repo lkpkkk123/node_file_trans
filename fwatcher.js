@@ -13,6 +13,7 @@ const { WatcherConfig: CONFIG } = require('./cfg.js');
 //const uploadingFiles = new Set();
 const pendingUploads = new Set();  // 延迟上传队列
 const pendingDeletes = new Set();  // 删除队列上传队列
+let switchEnabled = true;
 
 logger.info('='.repeat(60));
 logger.info('文件监听自动上传服务');
@@ -160,7 +161,38 @@ async function RunWatcher() {
     logger.info('上传文件队列添加 当前大小: ' + pendingUploads.size);
   }
 
-  // 创建文件监听器
+  if (CONFIG.SWITCH_CHECK_FILE.length > 0)
+  {
+    if (fs.existsSync(CONFIG.SWITCH_CHECK_FILE))
+    {
+    //读取开关文件内容
+      let content = fs.readFileSync(CONFIG.SWITCH_CHECK_FILE, 'utf8').trim();
+      switchEnabled = content === 'open';
+    }
+    else
+    {
+      //创建开关文件，默认开启
+      try {
+        fs.writeFileSync(CONFIG.SWITCH_CHECK_FILE, 'open', 'utf8');
+        switchEnabled = true;
+      } catch (err) {
+        logger.error(`[错误] 无法创建开关文件: ${CONFIG.SWITCH_CHECK_FILE} - ${err.message}`);
+        switchEnabled = true; // 默认开启
+      }
+    }
+    // 创建文件监听器
+    const switchWatcher = chokidar.watch(CONFIG.SWITCH_CHECK_FILE);
+    switchWatcher.on('change', () => {
+      let content = fs.readFileSync(CONFIG.SWITCH_CHECK_FILE, 'utf8').trim();
+      if (content === 'open')
+        switchEnabled = true;
+      else if (content === 'close')
+        switchEnabled = false;
+      logger.info(`[开关] 上传开关当前状态: ${switchEnabled ? '开启' : '关闭'}`);
+    });
+  }
+
+  
   const watcher = chokidar.watch(CONFIG.WATCH_DIR, {
     ignored: /(^|[\/\\])\../,  // 忽略隐藏文件
     persistent: true,
@@ -234,6 +266,9 @@ async function RunWatcher() {
 
   // 监听文件添加事件（文件写入完成）
   watcher.on('add', (filePath) => {
+    if (!switchEnabled){
+      return;
+    }
     const fileName = path.basename(filePath);
     logger.info(`[检测] ${fileName} - 文件已写入完成`);
 
@@ -242,6 +277,9 @@ async function RunWatcher() {
 
   // 监听文件变化事件
   watcher.on('change', (filePath) => {
+    if (!switchEnabled){
+      return;
+    }
     const fileName = path.basename(filePath);
     logger.info(`[变化] ${fileName} - 文件正在修改`);
     addToList(filePath);
@@ -249,6 +287,9 @@ async function RunWatcher() {
 
   //监听删除事件
   watcher.on('unlink', (filePath) => {
+    if (!switchEnabled){
+      return;
+    }
     if (CONFIG.DELETE_ON_SUCCESS)// 如果是上传成功后删除本地文件，则忽略删除事件
       return;
 
@@ -260,6 +301,9 @@ async function RunWatcher() {
     pendingDeletes.add(filePath);
   });
   watcher.on('unlinkDir', (path) => {
+    if (!switchEnabled){
+      return;
+    }
     console.log(`[目录删除] ${path}`);
   });
 
