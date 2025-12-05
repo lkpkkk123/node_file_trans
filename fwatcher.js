@@ -193,8 +193,30 @@ async function RunWatcher() {
   }
 
   
+  // 构建忽略规则
+  const ignorePatterns = [
+    /(^|[\/\\])\.\./  // 忽略隐藏文件
+  ];
+  
+  // 添加忽略的扩展名
+  if (CONFIG.IGNORE_EXTENSIONS && CONFIG.IGNORE_EXTENSIONS.length > 0) {
+    CONFIG.IGNORE_EXTENSIONS.forEach(ext => {
+      // 匹配以指定扩展名结尾的文件
+      ignorePatterns.push(new RegExp(`\\${ext}$`, 'i'));
+    });
+  }
+  
+  // 添加忽略的特定文件
+  if (CONFIG.IGNORE_FILES && CONFIG.IGNORE_FILES.length > 0) {
+    CONFIG.IGNORE_FILES.forEach(filename => {
+      // 匹配特定文件名
+      const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      ignorePatterns.push(new RegExp(`(^|[\\/\\\\])${escapedFilename}$`, 'i'));
+    });
+  }
+  
   const watcher = chokidar.watch(CONFIG.WATCH_DIR, {
-    ignored: /(^|[\/\\])\../,  // 忽略隐藏文件
+    ignored: ignorePatterns,
     persistent: true,
     ignoreInitial: true,  // 忽略初始扫描的文件
     awaitWriteFinish: {

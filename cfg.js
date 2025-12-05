@@ -27,6 +27,8 @@ const DefaultWatcherConfig = {
   SYNC_DELETE_FILE: true,  // 同步删除的文件
   DELETE_ON_SUCCESS: false,  // 上传成功后删除本地文件
   FILE_DISABLE_RESUME: ['.m3u8'], // 不支持断点续传的文件列表
+  IGNORE_EXTENSIONS: ['.tmp', '.swp'], // 忽略的文件扩展名列表
+  IGNORE_FILES: ['test.abc'], // 忽略的特定文件名列表
   STABILITY_THRESHOLD: 2000, // 文件稳定时间，单位毫秒
   SWITCH_CHECK_FILE: '/opt/aibox/cfg/fupload_switch.txt', // 控制开关文件路径，内容为open或者文件不存在则上传，否则不上传
 };
