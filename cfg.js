@@ -23,7 +23,7 @@ const DefaultWatcherConfig = {
   ENABLE_RESUME: true,
   ENABLE_MD5: false,
   VIRTUAL_DIR: 'uploads',  // 上传到服务器的虚拟目录
-  SYNC_INTERVAL: 5000,  // 文件关闭后等待5秒再上传（确保写入完成）
+  SYNC_INTERVAL: 5000,  // 同步间隔时间，单位毫秒
   SYNC_DELETE_FILE: true,  // 同步删除的文件
   DELETE_ON_SUCCESS: false,  // 上传成功后删除本地文件
   FILE_DISABLE_RESUME: ['.m3u8'], // 不支持断点续传的文件列表

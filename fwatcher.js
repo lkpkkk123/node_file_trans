@@ -47,6 +47,7 @@ async function RunWatcher() {
         CONFIG.VIRTUAL_DIR
       ),
       file_queue: [],
+      isProcessing: false  // 添加处理锁标志
     });
   }
   
@@ -219,31 +220,41 @@ async function RunWatcher() {
     ignored: ignorePatterns,
     persistent: true,
     ignoreInitial: true,  // 忽略初始扫描的文件
-    awaitWriteFinish: {
-      stabilityThreshold: CONFIG.STABILITY_THRESHOLD || 100,  // 文件2秒内没有变化才认为写入完成
-      pollInterval: 100
-    }
+    // 激进的 FD 优化配置
+    //usePolling: true,  // 改用轮询模式，不持续打开文件
+    interval: 3000,     // 轮询间隔 1 秒
+    //binaryInterval: 3000,  // 二进制文件轮询间隔
+    //alwaysStat: false,  // 不总是调用 stat
+    //depth: 99,          // 限制目录深度
+    //awaitWriteFinish: false,  // 禁用内置稳定性检查
+    //atomic: false       // 禁用原子写入检测
   });
 
   async function  processClientUpload(clientIndex){
-    //使用 Promise.all 并行上传文件到不同客户端
-    while(clients[clientIndex].file_queue.length>0)
+    // 检查是否正在处理，避免并发冲突
+    if (clients[clientIndex].isProcessing) {
+      return;
+    }
+    
+    if(clients[clientIndex].file_queue.length>0)
     {
-      let filePath = clients[clientIndex].file_queue.shift();
-      let succ = await uploadFile(filePath, clientIndex);
-      if (succ && CONFIG.DELETE_ON_SUCCESS) {
-        fs.unlink(filePath, (err) => {
-          if (err) {
-            logger.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
-          } else {
-            logger.info(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
-          }
-        });
+      clients[clientIndex].isProcessing = true;
+      try {
+        let filePath = clients[clientIndex].file_queue.shift();
+        let succ = await uploadFile(filePath, clientIndex);
+        if (succ && CONFIG.DELETE_ON_SUCCESS) {
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              logger.error(`[错误] 删除文件失败: ${filePath} - ${err.message}`);
+            } else {
+              logger.info(`[删除] ${path.basename(filePath)} - 上传成功后删除本地文件`);
+            }
+          });
+        }
+      } finally {
+        clients[clientIndex].isProcessing = false;
       }
     }
-    setTimeout(async () => {
-      await processClientUpload(clientIndex);
-    }, 100);
   }
   async function processUploadQueue() {
     if (pendingUploads.size > 0) {
@@ -281,9 +292,12 @@ async function RunWatcher() {
   // 启动队列处理
   processUploadQueue();
 
+  // 使用 setInterval 定时处理上传队列，避免递归调用堆积
   for(let i=0;i<clients.length;i++)
   {
-    await processClientUpload(i);
+    setInterval(async () => {
+      await processClientUpload(i);
+    }, 100);
   }
 
   // 监听文件添加事件（文件写入完成）

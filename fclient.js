@@ -104,17 +104,23 @@ class FileUploadClient {
       
       // 测试模式下不断开连接，通知上传完成
       if (this.isTestMode && this.uploadComplete) {
-        this.uploadComplete();
+        const complete = this.uploadComplete;
+        this.uploadComplete = null;
+        this.uploadFailed = null;
+        complete();
       } else {
         this.disconnect();
       }
       
     } else if (response.type === 'error') {
       logger.error(`✗ 服务器错误: ${response.message}`);
-      this.disconnect();
       if (this.uploadFailed) {
-        this.uploadFailed(new Error(response.message));        
+        const failed = this.uploadFailed;
+        this.uploadComplete = null;
+        this.uploadFailed = null;
+        failed(new Error(response.message));
       }
+      //this.disconnect();
     } else if (response.type === 'del_file_ack') {
       logger.info(response.message);
     }
@@ -129,8 +135,14 @@ class FileUploadClient {
       stream.on('data', (data) => {
         hash.update(data);
       });
-      stream.on('end', () => resolve(hash.digest('hex')));
-      stream.on('error', reject);
+      stream.on('end', () => {
+        stream.destroy();
+        resolve(hash.digest('hex'));
+      });
+      stream.on('error', (err) => {
+        stream.destroy(); // 错误时也要销毁流
+        reject(err);
+      });
     });
   }
   // 上传文件
@@ -226,12 +238,13 @@ class FileUploadClient {
       // 检查是否可以写入
       let writeSize = Math.min(chunk.length, this.currentFile.size - this.currentFile.sent);
       if (writeSize <= 0) {
-        //结束发送
-        this.currentFile.stream.close();
+        //结束发送，直接销毁流
+        if (this.currentFile.stream) {
+          this.currentFile.stream.destroy();
+          this.currentFile.stream = null;
+        }
         return;
       }
-
-      
 
       //发送writeSize大小的数据
       chunk = chunk.slice(0, writeSize);
@@ -264,6 +277,12 @@ class FileUploadClient {
       // 移除 drain 监听器，防止内存泄漏
       this.socket.removeListener('drain', drainHandler);
       
+      // 清理流引用
+      if (this.currentFile && this.currentFile.stream) {
+        this.currentFile.stream.destroy();
+        this.currentFile.stream = null;
+      }
+      
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       const avgSpeed = this.calculateSpeed(this.currentFile.sent - this.startPos, Date.now() - startTime);
       logger.info('\n✓ 文件发送完成');
@@ -273,15 +292,26 @@ class FileUploadClient {
 
     });
 
+    this.currentFile.stream.on('close', () => {
+      logger.info('文件流已关闭 '+ this.currentFile.path);
+    });
+
     this.currentFile.stream.on('error', (err) => {
       // 移除 drain 监听器
       this.socket.removeListener('drain', drainHandler);
       
+      // 销毁流
+      if (this.currentFile && this.currentFile.stream) {
+        this.currentFile.stream.destroy();
+        this.currentFile.stream = null;
+      }
+      
       logger.error('✗ 读取文件错误:', err.message);
-      this.isUploading = false; // 释放锁
-      this.disconnect();
       if (this.uploadFailed) {
-        this.uploadFailed(err);        
+        const failed = this.uploadFailed;
+        this.uploadComplete = null;
+        this.uploadFailed = null;
+        failed(err);
       }
     });
   }

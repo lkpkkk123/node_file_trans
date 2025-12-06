@@ -1,0 +1,23 @@
+{
+  "WATCH_DIR": "/home/likp/watch_uploads",
+  "SERVER_HOST": "192.168.8.237",
+  "SERVER_PORT": 3000,
+  "ENABLE_RESUME": true,
+  "ENABLE_MD5": false,
+  "VIRTUAL_DIR": "uploads",
+  "SYNC_INTERVAL": 5000,
+  "SYNC_DELETE_FILE": true,
+  "DELETE_ON_SUCCESS": false,
+  "FILE_DISABLE_RESUME": [
+    ".m3u8"
+  ],
+  "IGNORE_EXTENSIONS": [
+    ".tmp",
+    ".swp"
+  ],
+  "IGNORE_FILES": [
+    "test.abc"
+  ],
+  "STABILITY_THRESHOLD": 2000,
+  "SWITCH_CHECK_FILE": "/opt/aibox/cfg/fupload_switch.txt"
+}

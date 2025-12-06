@@ -104,7 +104,7 @@ class myFile {
       }
 
       this.stream.on('error', (err) => {
-        logger.error(`[文件错误] ${this.filePath}: ${err.message}`);
+        //logger.error(`[文件错误] ${this.filePath}: ${err.message}`);
         //this.hasError = true;
         this.cleanup();
         this.hasError = false;//可能是目录不存在尝试重建目录
@@ -122,7 +122,11 @@ class myFile {
     let isOpenSuccess = false;
     for (let i = 0; i < 2; i++) {
       try {
-        await this.CreateFile(startPos, filePath);
+        let err=await this.CreateFile(startPos, filePath);
+        if (i == 1 && !err)
+        {
+          logger.error(`无法打开文件: ${filePath}`);
+        }
         isOpenSuccess = true;
         this.isClosed = false;
         this.filePath = filePath;
