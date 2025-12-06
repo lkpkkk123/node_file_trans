@@ -7,6 +7,7 @@ class myWatcher {
     this.watchers = new Map();  // path -> watcher
     this.events = new Map();
     this.cbs = new Map();
+    this.pathDepth = dirPath.split(path.sep).length;
     this.cfg = cfg;
     if (!this.cfg.interval) {
       this.cfg.interval = 1000;//1秒处理一次事件
@@ -106,7 +107,7 @@ class myWatcher {
         // 文件存在 = 新建或重命名到此
         if (stat.isDirectory()) {
           console.log(`[新建目录] ${fullPath}`);
-          const depth = fullPath.split(path.sep).length - WATCH_DIR.split(path.sep).length;
+          const depth = fullPath.split(path.sep).length - this.pathDepth;
           if (depth < this.cfg.maxDepth) {
             console.log(`[监控] 添加目录监控: ${fullPath}`);
             this.watchDirectory(fullPath, depth);
@@ -162,7 +163,7 @@ class myWatcher {
     }
     
     try {
-      const watcher = fs.watch(dirPath,{ recursive: true }, (eventType, filename) => {
+      const watcher = fs.watch(dirPath, { recursive: false }, (eventType, filename) => {
         this.handleFileEvent(eventType, filename, dirPath);
       });
       
@@ -186,10 +187,11 @@ class myWatcher {
         }
       });
       
-      // 递归监控子目录
+      // 只递归遍历子目录，不处理文件（性能优化）
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.isDirectory()) {
+        // 只处理目录，跳过文件
+        if (entry.isDirectory() && !this.isIgnored(entry.name)) {
           const subPath = path.join(dirPath, entry.name);
           this.watchDirectory(subPath, depth + 1);
         }
