@@ -18,7 +18,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "chokidar": "^3.6.0",
     "winston": "^3.18.3"
   },
   "devDependencies": {

@@ -155,6 +155,15 @@ class FileUploadClient {
     logger.info(`发送删除文件请求 ${jsonString.length} 字节, 内容: ${jsonString}`);
     this.socket.write(TcpProtocol.packJson(jsonString));
   }
+  delDir(serverPaths) {
+    const metadata = {
+      type: 'del_dir',
+      filenames: serverPaths
+    };
+    const jsonString = JSON.stringify(metadata);
+    logger.info(`发送删除文件请求 ${jsonString.length} 字节, 内容: ${jsonString}`);
+    this.socket.write(TcpProtocol.packJson(jsonString));
+  }
   // 上传文件
   async uploadFile(filePath,serverPath, resumeEnable, useMd5 = false) {//serverDir不能带/
     // 检查文件是否存在

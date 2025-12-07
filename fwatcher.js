@@ -1,4 +1,4 @@
-const chokidar = require('chokidar');
+const myWatcher = require('./fs_watch.js');
 const path = require('path');
 const fs = require('fs');
 const { FileUploadClient } = require('./fclient.js');
@@ -14,7 +14,6 @@ const { WatcherConfig: CONFIG } = require('./cfg.js');
 const pendingUploads = new Set();  // 延迟上传队列
 const pendingDeletes = new Set();  // 删除队列上传队列
 let switchEnabled = true;
-
 logger.info('='.repeat(60));
 logger.info('文件监听自动上传服务');
 logger.info('='.repeat(60));
@@ -182,52 +181,26 @@ async function RunWatcher() {
       }
     }
     // 创建文件监听器
-    const switchWatcher = chokidar.watch(CONFIG.SWITCH_CHECK_FILE);
-    switchWatcher.on('change', () => {
-      let content = fs.readFileSync(CONFIG.SWITCH_CHECK_FILE, 'utf8').trim();
-      if (content === 'open')
-        switchEnabled = true;
-      else if (content === 'close')
-        switchEnabled = false;
-      logger.info(`[开关] 上传开关当前状态: ${switchEnabled ? '开启' : '关闭'}`);
+
+    const switchWatcher = fs.watch(CONFIG.SWITCH_CHECK_FILE, (eventType, filename) => {
+      if (eventType === 'change')
+      {
+        let content = fs.readFileSync(CONFIG.SWITCH_CHECK_FILE, 'utf8').trim();
+        if (content === 'open')
+          switchEnabled = true;
+        else if (content === 'close')
+          switchEnabled = false;
+        logger.info(`[开关] 上传开关当前状态: ${switchEnabled ? '开启' : '关闭'}`);
+      }
     });
   }
 
   
-  // 构建忽略规则
-  const ignorePatterns = [
-    /(^|[\/\\])\.\./  // 忽略隐藏文件
-  ];
-  
-  // 添加忽略的扩展名
-  if (CONFIG.IGNORE_EXTENSIONS && CONFIG.IGNORE_EXTENSIONS.length > 0) {
-    CONFIG.IGNORE_EXTENSIONS.forEach(ext => {
-      // 匹配以指定扩展名结尾的文件
-      ignorePatterns.push(new RegExp(`\\${ext}$`, 'i'));
-    });
-  }
-  
-  // 添加忽略的特定文件
-  if (CONFIG.IGNORE_FILES && CONFIG.IGNORE_FILES.length > 0) {
-    CONFIG.IGNORE_FILES.forEach(filename => {
-      // 匹配特定文件名
-      const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      ignorePatterns.push(new RegExp(`(^|[\\/\\\\])${escapedFilename}$`, 'i'));
-    });
-  }
-  
-  const watcher = chokidar.watch(CONFIG.WATCH_DIR, {
-    ignored: ignorePatterns,
-    persistent: true,
-    ignoreInitial: true,  // 忽略初始扫描的文件
-    // 激进的 FD 优化配置
-    //usePolling: true,  // 改用轮询模式，不持续打开文件
-    interval: 3000,     // 轮询间隔 1 秒
-    //binaryInterval: 3000,  // 二进制文件轮询间隔
-    //alwaysStat: false,  // 不总是调用 stat
-    //depth: 99,          // 限制目录深度
-    //awaitWriteFinish: false,  // 禁用内置稳定性检查
-    //atomic: false       // 禁用原子写入检测
+  const watcher = new myWatcher(CONFIG.WATCH_DIR,{
+    interval: CONFIG.STABILITY_THRESHOLD,
+    ignoreStartWith: CONFIG.IGNORE_START_WITH,
+    ignoreEndWith: CONFIG.IGNORE_END_WITH,
+    maxDepth: 99
   });
 
   async function  processClientUpload(clientIndex){
@@ -277,12 +250,23 @@ async function RunWatcher() {
         logger.info('重新连接服务器...');
         await clients[index].client.connect();
       }
-      let relativePaths = filesToDelete.map((filePath) => {
-        let relativePath = filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
+      let fileRelativePaths = [];
+      let dirRelativePaths = [];
+      for (const item of filesToDelete) {
+        let relativePath = item.filePath.replace(CONFIG.WATCH_DIR + path.sep, '');
         relativePath = CONFIG.VIRTUAL_DIR + path.sep + relativePath;
-        return  relativePath;
-      });
-      clients[index].client.delFile(relativePaths);
+        if(item.type==='dir'){
+          dirRelativePaths.push(relativePath);
+        } else {
+          fileRelativePaths.push(relativePath);
+        }
+      }
+      if(fileRelativePaths.length > 0) {
+        clients[index].client.delFile(fileRelativePaths);
+      }
+      if(dirRelativePaths.length > 0) {
+        clients[index].client.delDir(dirRelativePaths);
+      }
     }
 
     // 等待1秒后再次检查队列
@@ -334,24 +318,29 @@ async function RunWatcher() {
 
     const fileName = path.basename(filePath);
     logger.info(`[删除] ${fileName} - 文件已被删除`);
-    pendingDeletes.add(filePath);
+    pendingDeletes.add({ filePath , type: 'file'});
   });
-  watcher.on('unlinkDir', (path) => {
+  watcher.on('addDir', (filePath) => {
     if (!switchEnabled){
       return;
     }
-    console.log(`[目录删除] ${path}`);
+    console.log(`[目录添加] ${filePath}`);
+    pendingDeletes.add({ filePath , type: 'dir'});
+  });
+  watcher.on('unlinkDir', (filePath) => {
+    if (!switchEnabled){
+      return;
+    }
+    console.log(`[目录删除] ${filePath}`);
+    pendingDeletes.add({ filePath , type: 'dir'});
   });
 
   // 监听错误
   watcher.on('error', (error) => {
     logger.error('[错误] 监听器错误:', error);
   });
+  watcher.start();
 
-  // 监听器就绪
-  watcher.on('ready', () => {
-    logger.info('[就绪] 文件监听器已启动，等待文件...\n');
-  });
 
   // 优雅退出
   process.on('SIGINT', async () => {

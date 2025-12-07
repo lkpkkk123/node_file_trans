@@ -109,7 +109,7 @@ class myWatcher {
       if (this.isIgnored(filename,false)) {
         return;
       }
-      console.log(`[变化] ${fullPath}`);
+      //console.log(`[变化] ${fullPath}`);
       let type='change';
       const eventKey = `${type}:${fullPath}`;
       this.events.set(eventKey, {fullPath,type:'change',tm:this.getProcessTick()});
@@ -195,7 +195,9 @@ class myWatcher {
         this.handleFileEvent(eventType, filename, dirPath);
       });
       if (scanFiles) {
-        this.ScanFiles(dirPath);
+        setTimeout(() => {
+          this.ScanFiles(dirPath);
+        }, 800);
       }
       this.watchers.set(dirPath, watcher);
       
@@ -242,6 +244,7 @@ class myWatcher {
         // 只处理目录，跳过文件
         if (entry.isDirectory() && !this.isIgnored(entry.name,true)) {
           const subPath = path.join(entry.parentPath, entry.name);
+          console.log(entry);
           this.watchOneDirectory(subPath, scanFiles);
         }
       }
@@ -269,7 +272,12 @@ class myWatcher {
   }
   start() {
     console.log(`开始递归监控目录: ${this.dirPath}`);
-    this.watchDirectory(this.dirPath);
+    try {
+      this.watchDirectory(this.dirPath);
+    } catch (err) {
+      console.error(`[错误] 无法监控根目录 ${this.dirPath}:`, err.message);
+      return;
+    }
     //console.log('已监控目录数量:', this.watchers.size);
     setInterval(() => {
       this.eventProcess();

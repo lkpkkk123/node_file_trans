@@ -566,6 +566,23 @@ class mySession {
           await this.DeleteDirectoryEmpty(dirPath);
         }
       }
+    } else if (msg.type === 'del_dir') {
+      logger.info(`[删除] 请求删除目录: ${JSON.stringify(msg.filenames)}`);
+      for (let i=0;i<msg.filenames.length;i++)
+      {
+        let dirPath = mapToRealPath(msg.filenames[i]);
+        try {
+          await fs.promises.rm(dirPath, { recursive: true, force: true });
+          logger.info(`[删除] 目录已删除: ${dirPath}`);
+        } catch (err) {
+          logger.error(`[错误] 删除目录失败 ${dirPath}: ${err.message}`);
+          const resp = {
+            type: 'del_dir_ack',
+            message: `目录删除失败: ${dirPath}`
+          };
+          this.send(JSON.stringify(resp));
+        }
+      }
     } else {
       logger.info(`[未知类型] ${msg.type}`);
     }
