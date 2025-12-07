@@ -99,6 +99,13 @@ class myWatcher {
     }
 
   }
+  setEvent(key,value)
+  {
+    if (!this.events.has(key))
+    {
+      this.events.set(key,value);
+    }
+  }
   handleFileEvent(eventType, filename, watchPath) {
     if (!filename) return;  // 忽略空文件名
   
@@ -112,7 +119,7 @@ class myWatcher {
       //console.log(`[变化] ${fullPath}`);
       let type='change';
       const eventKey = `${type}:${fullPath}`;
-      this.events.set(eventKey, {fullPath,type:'change',tm:this.getProcessTick()});
+      this.setEvent(eventKey, {fullPath,type:'change',tm:this.getProcessTick()});
     } else if (eventType === 'rename') {
       
       // 区分是新建还是删除
@@ -128,7 +135,7 @@ class myWatcher {
           if (depth < this.cfg.maxDepth) {
             console.log(`[监控] 添加目录监控: ${fullPath}`);
             this.watchDirectory(fullPath, depth, true);
-            this.events.set(`addDir:${fullPath}`, {fullPath, type: 'addDir', tm: this.getProcessTick()});
+            this.setEvent(`addDir:${fullPath}`, {fullPath, type: 'addDir', tm: this.getProcessTick()});
           } else {
             console.log(`[跳过] 目录深度超限: ${fullPath}`);
           }
@@ -136,8 +143,8 @@ class myWatcher {
           if (this.isIgnored(filename,false)) {
             return;
           }
-          this.events.set(`add:${fullPath}`, {fullPath, type: 'add', tm: this.getProcessTick()});
-          console.log(`[新建文件] ${fullPath}`);
+          this.setEvent(`add:${fullPath}`, {fullPath, type: 'add', tm: this.getProcessTick()});
+          console.log(`[新建文件1] ${fullPath}`);
         }
       } catch (err) {
       // 文件不存在 = 删除或重命名走了
@@ -147,7 +154,7 @@ class myWatcher {
               return;
             }
             console.log(`[删除目录] ${fullPath}`);
-            this.events.set(`unlinkDir:${fullPath}`, {fullPath, type: 'unlinkDir', tm: this.getProcessTick()});
+            this.setEvent(`unlinkDir:${fullPath}`, {fullPath, type: 'unlinkDir', tm: this.getProcessTick()});
           }
           else {
             if (this.isIgnored(filename,false)) {
@@ -155,7 +162,7 @@ class myWatcher {
             }
 
             console.log(`[删除文件] ${fullPath}`);
-            this.events.set(`unlink:${fullPath}`, {fullPath, type: 'unlink', tm: this.getProcessTick()});
+            this.setEvent(`unlink:${fullPath}`, {fullPath, type: 'unlink', tm: this.getProcessTick()});
           }
         } else {
           console.log(`[错误] ${fullPath}: ${err.message}`);
@@ -181,8 +188,8 @@ class myWatcher {
         if (entry.isFile() && !this.isIgnored(entry.name,false)) {
           const filePath = path.join(entry.parentPath, entry.name);
           //this.watchOneDirectory(filePath);
-          this.events.set(`add:${filePath}`, {fullPath: filePath, type: 'add', tm: this.getProcessTick()});
-          console.log(`[新建文件] ${filePath}`);
+          this.setEvent(`add:${filePath}`, {fullPath: filePath, type: 'add', tm: this.getProcessTick()});
+          console.log(`[新建文件2] ${filePath}`);
         }
       }
     });
@@ -244,7 +251,7 @@ class myWatcher {
         // 只处理目录，跳过文件
         if (entry.isDirectory() && !this.isIgnored(entry.name,true)) {
           const subPath = path.join(entry.parentPath, entry.name);
-          console.log(entry);
+          //console.log(entry);
           this.watchOneDirectory(subPath, scanFiles);
         }
       }
@@ -256,7 +263,9 @@ class myWatcher {
   }
   eventProcess()
   {
+    //console.log(`处理事件 tm: ${this.getProcessTick()} , 待处理事件数量: ${this.events.size}`);
     this.events.forEach((value, eventKey) => {
+      //console.log(`检查事件: ${eventKey} , 事件时间: ${value.tm}`);
       if (this.getProcessTick() - value.tm >= this.cfg.interval)
       {
         if (this.cbs.has(value.type)) {

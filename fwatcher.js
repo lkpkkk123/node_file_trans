@@ -208,8 +208,11 @@ async function RunWatcher() {
     if (clients[clientIndex].isProcessing) {
       return;
     }
-    
-    if(clients[clientIndex].file_queue.length>0)
+    let isLog = clients[clientIndex].file_queue.length > 0;
+    if (isLog) {
+      logger.info(`sync start queue size: ${clients[clientIndex].file_queue.length} tm=${Date.now()}`);
+    }
+    while(clients[clientIndex].file_queue.length>0)
     {
       clients[clientIndex].isProcessing = true;
       try {
@@ -224,10 +227,15 @@ async function RunWatcher() {
             }
           });
         }
-      } finally {
-        clients[clientIndex].isProcessing = false;
+      } catch (err) {
+        logger.error(`[错误] 处理上传队列时出错: ${err.message}`);
       }
     }
+    if (isLog) {
+      logger.info(`sync finish queue size: ${clients[clientIndex].file_queue.length} tm=${Date.now()}`);
+    }
+    clients[clientIndex].isProcessing = false;
+
   }
   async function processUploadQueue() {
     if (pendingUploads.size > 0) {
@@ -348,7 +356,7 @@ async function RunWatcher() {
     
     pendingUploads.clear();
     
-    await watcher.close();
+    watcher.stop();  // 使用 stop() 而不是 close()
     logger.info('监听器已关闭');
     // 等待日志写入
     await new Promise(resolve => setTimeout(resolve, 200));
