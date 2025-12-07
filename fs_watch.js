@@ -1,3 +1,4 @@
+const { dir } = require('console');
 const fs = require('fs');
 const path = require('path');
 
@@ -67,23 +68,36 @@ class myWatcher {
     }
     this.watchers.clear();
   }
-  isIgnored(filename) {
+  isIgnored(filename,isDir) {
     // 忽略以指定前缀开头的文件或目录
-    let baseName = path.basename(filename);
-    for (let prefix of this.cfg.ignoreStartWith) {
-      if (baseName.startsWith(prefix)) {
+    if (isDir) {
+      let dir = filename+path.sep;//目录不判断StartWitch,只判断EndWitch
+      // 忽略以指定后缀结尾的文件或目录
+      for (let suffix of this.cfg.ignoreEndWith) {
+        if (dir.endsWith(suffix)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    else {
+      let baseName = path.basename(filename);
+      for (let prefix of this.cfg.ignoreStartWith) {
+        if (baseName.startsWith(prefix)) {
         //console.log(`[忽略] 以 ${prefix} 开头: ${filename}`);
-        return true;
+          return true;
+        }
       }
-    }
-    // 忽略以指定后缀结尾的文件或目录
-    for (let suffix of this.cfg.ignoreEndWith) {
-      if (baseName.endsWith(suffix)) {
+      // 忽略以指定后缀结尾的文件或目录
+      for (let suffix of this.cfg.ignoreEndWith) {
+        if (baseName.endsWith(suffix)) {
         //console.log(`[忽略] 以 ${suffix} 结尾: ${filename}`);
-        return true;
+          return true;
+        }
       }
+      return false;
     }
-    return false;
+
   }
   handleFileEvent(eventType, filename, watchPath) {
     if (!filename) return;  // 忽略空文件名
@@ -92,7 +106,7 @@ class myWatcher {
   
     
     if (eventType === 'change') {
-      if (this.isIgnored(filename)) {
+      if (this.isIgnored(filename,false)) {
         return;
       }
       console.log(`[变化] ${fullPath}`);
@@ -106,17 +120,20 @@ class myWatcher {
         const stat = fs.statSync(fullPath);
         // 文件存在 = 新建或重命名到此
         if (stat.isDirectory()) {
+          if (this.isIgnored(filename,true)) {
+            return;
+          }
           console.log(`[新建目录] ${fullPath}`);
           const depth = fullPath.split(path.sep).length - this.pathDepth;
           if (depth < this.cfg.maxDepth) {
             console.log(`[监控] 添加目录监控: ${fullPath}`);
-            this.watchDirectory(fullPath, depth);
+            this.watchDirectory(fullPath, depth, true);
             this.events.set(`addDir:${fullPath}`, {fullPath, type: 'addDir', tm: this.getProcessTick()});
           } else {
             console.log(`[跳过] 目录深度超限: ${fullPath}`);
           }
         } else {
-          if (this.isIgnored(filename)) {
+          if (this.isIgnored(filename,false)) {
             return;
           }
           this.events.set(`add:${fullPath}`, {fullPath, type: 'add', tm: this.getProcessTick()});
@@ -126,16 +143,17 @@ class myWatcher {
       // 文件不存在 = 删除或重命名走了
         if (err.code === 'ENOENT') {
           if (this.closeWatcher(fullPath)) {
+            if (this.isIgnored(filename,true)) {
+              return;
+            }
             console.log(`[删除目录] ${fullPath}`);
             this.events.set(`unlinkDir:${fullPath}`, {fullPath, type: 'unlinkDir', tm: this.getProcessTick()});
           }
           else {
-            if (this.isIgnored(filename)) {
+            if (this.isIgnored(filename,false)) {
               return;
             }
-            if(this.events.has(`unlinkDir:${fullPath}`)){//删除目录会有两次回调，忽略第二次
-              return;
-            }
+
             console.log(`[删除文件] ${fullPath}`);
             this.events.set(`unlink:${fullPath}`, {fullPath, type: 'unlink', tm: this.getProcessTick()});
           }
@@ -151,22 +169,34 @@ class myWatcher {
   
   //pendingEvents.set(eventKey, timer);
   }
-  watchDirectory(dirPath, depth = 0) {
-    if (depth >= this.cfg.maxDepth) {
-      console.log(`[跳过] 深度超限: ${dirPath} (深度 ${depth})`);
-      return;
-    }
-    
-    // 如果已经在监控，跳过
-    if (this.watchers.has(dirPath)) {
-      return;
-    }
-    
+  ScanFiles(dirPath)
+  {
+    fs.readdir(dirPath, { withFileTypes: true, recursive: true }, (err, files) => {
+      if (err) {
+        console.error(`[错误] 读取目录 ${dirPath} 失败:`, err.message);
+        return;
+      }
+      for (const entry of files) {
+        // 只处理目录，跳过文件
+        if (entry.isFile() && !this.isIgnored(entry.name,false)) {
+          const filePath = path.join(entry.parentPath, entry.name);
+          //this.watchOneDirectory(filePath);
+          this.events.set(`add:${filePath}`, {fullPath: filePath, type: 'add', tm: this.getProcessTick()});
+          console.log(`[新建文件] ${filePath}`);
+        }
+      }
+    });
+  }
+  watchOneDirectory(dirPath, scanFiles = false)
+  {
+  // 监控单个目录
     try {
       const watcher = fs.watch(dirPath, { recursive: false }, (eventType, filename) => {
         this.handleFileEvent(eventType, filename, dirPath);
       });
-      
+      if (scanFiles) {
+        this.ScanFiles(dirPath);
+      }
       this.watchers.set(dirPath, watcher);
       
       watcher.on('error', (error) => {
@@ -186,20 +216,37 @@ class myWatcher {
           console.log(`[清理] 目录已删除: ${dirPath}`);
         }
       });
-      
-      // 只递归遍历子目录，不处理文件（性能优化）
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-      for (const entry of entries) {
-        // 只处理目录，跳过文件
-        if (entry.isDirectory() && !this.isIgnored(entry.name)) {
-          const subPath = path.join(dirPath, entry.name);
-          this.watchDirectory(subPath, depth + 1);
-        }
-      }
+    
       
     } catch (error) {
       console.error(`[错误] 无法监控目录 ${dirPath}:`, error.message);
     }
+  }
+  watchDirectory(dirPath, depth = 0, scanFiles = false) {
+    if (depth >= this.cfg.maxDepth) {
+      console.log(`[跳过] 深度超限: ${dirPath} (深度 ${depth})`);
+      return;
+    }
+    
+    // 如果已经在监控，跳过
+    if (this.watchers.has(dirPath)) {
+      return;
+    }
+    this.watchOneDirectory(dirPath, scanFiles);
+    fs.readdir(dirPath, { withFileTypes: true, recursive: true }, (err, files) => {
+      if (err) {
+        console.error(`[错误] 读取目录 ${dirPath} 失败:`, err.message);
+        return;
+      }
+      for (const entry of files) {
+        // 只处理目录，跳过文件
+        if (entry.isDirectory() && !this.isIgnored(entry.name,true)) {
+          const subPath = path.join(entry.parentPath, entry.name);
+          this.watchOneDirectory(subPath, scanFiles);
+        }
+      }
+      console.log(`[扫描完成] 目录 ${dirPath} 下的所有子目录已监控 数量: ${this.watchers.size}`);
+    });
   }
   getProcessTick() {
     return Math.floor(process.uptime() * 1000);
@@ -223,7 +270,7 @@ class myWatcher {
   start() {
     console.log(`开始递归监控目录: ${this.dirPath}`);
     this.watchDirectory(this.dirPath);
-    console.log('已监控目录数量:', this.watchers.size);
+    //console.log('已监控目录数量:', this.watchers.size);
     setInterval(() => {
       this.eventProcess();
     }, this.cfg.interval);
@@ -234,12 +281,12 @@ class myWatcher {
 }
 
 if (require.main === module) {
-  console.log('开始监控目录: /home/likp/watch_uploads,最大深度: 99');
+  //console.log('开始监控目录: /home/likp/watch_uploads,最大深度: 99');
   let watcher = new myWatcher('/home/likp/watch_uploads',
     {
       interval: 1000,
       ignoreStartWith: ['.'],
-      ignoreEndWith: ['.tmp'],
+      ignoreEndWith: ['.tmp','.tmp/'],
       maxDepth: 99
     });
   watcher.on('add', (fullPath) => {
@@ -255,6 +302,6 @@ if (require.main === module) {
     console.log(`[回调] 目录删除: ${fullPath}`);
   });
   watcher.start();
-  console.log('监控目录数量:', watcher.watchers.size);
+  //console.log('监控目录数量:', watcher.watchers.size);
 }
 module.exports = myWatcher;
