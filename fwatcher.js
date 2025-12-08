@@ -3,10 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const { FileUploadClient } = require('./fclient.js');
 const logger = require('./logger').logger;
-
-
 const { WatcherConfig: CONFIG } = require('./cfg.js');
 
+logger.configure({
+  open: CONFIG.LOG_OPEN,
+  enableCaller: CONFIG.LOG_ENABLE_CALLER,
+  level: CONFIG.LOG_LEVEL
+});
 // 正在上传的文件集合
 //const uploadingFiles = new Set();
 const pendingUploads = new Set();  // 延迟上传队列

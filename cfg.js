@@ -4,8 +4,7 @@ const DefaultServerConfig = {
   PORT: 3000,
   HOST: '0.0.0.0',
   UPLOAD_PATH_MAP: [
-    ['.', '/home/likp/test_uploads'],  // virtual path, real path .是根目录，必须有一个根目录
-    ['uploads', '/home/likp/test_uploads2']
+    ['.', '/hd/test_uploads']  // virtual path, real path .是根目录，必须有一个根目录
   ],
   MAX_CONNECTIONS: 500,
   MAX_BUFFER_SIZE: 64 * 1024 * 1024, // 64MB socket 缓冲
@@ -13,11 +12,14 @@ const DefaultServerConfig = {
   CLIENT_TIMEOUT: 3 * 60 * 1000, // 3分钟
   RESUME_TIMEOUT: 2 * 60 * 60 * 1000, // 2小时
   DELETE_EMPTY_DIR: true, // 收到删除文件时，检查删除空目录
+  LOG_OPEN: true, // 是否打印日志
+  LOG_ENABLE_CALLER: false, // 是否打印调用者信息
+  LOG_LEVEL: 'INFO', // 日志级别 DEBUG, INFO, WARN, ERROR
 };
 
 // 默认监听配置
 const DefaultWatcherConfig = {
-  WATCH_DIR: '/home/likp/watch_uploads',  // 监听目录
+  WATCH_DIR: '/opt/aibox/record',  // 监听目录
   SERVER_HOST: '192.168.8.78',
   SERVER_PORT: 3000,
   ENABLE_RESUME: true,
@@ -31,6 +33,9 @@ const DefaultWatcherConfig = {
   IGNORE_START_WITH: ['test.abc'], // 忽略的特定文件名列表
   STABILITY_THRESHOLD: 1000, // 文件稳定时间，单位毫秒
   SWITCH_CHECK_FILE: '/opt/aibox/cfg/fupload_switch.txt', // 控制开关文件路径，内容为open或者文件不存在则上传，否则不上传
+  LOG_OPEN: true, // 是否打印日志
+  LOG_ENABLE_CALLER: false, // 是否打印调用者信息
+  LOG_LEVEL: 'INFO', // 日志级别 DEBUG, INFO, WARN, ERROR
 };
 
 /**

@@ -20,15 +20,17 @@ function getCaller() {
   return 'unknown';
 }
 
-let currentLogLevel = LOG_LEVELS.DEBUG;
+let currentLogLevel = LOG_LEVELS.INFO;
 let enableCallerInfo = false;
-
-function configureLogging({ level = 'DEBUG', enableCaller = false } = {}) {
-  currentLogLevel = LOG_LEVELS[level] ?? LOG_LEVELS.DEBUG;
+let logOpen;
+function configureLogging({ level = 'INFO', enableCaller = false, open = true } = {}) {
+  currentLogLevel = LOG_LEVELS[level] ?? LOG_LEVELS.INFO;
   enableCallerInfo = enableCaller;
+  logOpen = open;
 }
 
-function logger(level = 'DEBUG', ...args) {
+function logger(level = 'INFO', ...args) {
+  if(logOpen===false) return;
   // 级别过滤
   if (LOG_LEVELS[level] < currentLogLevel) return;
   
@@ -39,7 +41,7 @@ function logger(level = 'DEBUG', ...args) {
   if (!logger._lastTime || now - logger._lastTime > 0) {
     logger._lastTime = now;
     const date = new Date(now);
-    logger._cachedTime = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}.${date.getMilliseconds().toString().padStart(3, '0')}`;
+    logger._cachedTime = `${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}.${date.getMilliseconds().toString().padStart(3, '0')}`;
   }
   timestamp = logger._cachedTime;
   
@@ -48,7 +50,7 @@ function logger(level = 'DEBUG', ...args) {
   
   // 使用 console[level] 对应的方法
   const consoleMethod = console[level.toLowerCase()] || console.log;
-  consoleMethod(`${timestamp}${caller ? ` [${caller}]` : ''}`, ...args);
+  consoleMethod(`${timestamp} [${level}] ${caller ? ` [${caller}]` : ''}`, ...args);
 }
 
 // 初始化缓存

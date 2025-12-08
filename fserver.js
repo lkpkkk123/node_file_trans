@@ -7,6 +7,11 @@ const logger = require('./logger').logger;
 const TcpProtocol = require('./tcp_protocol');
 const { ServerConfig: CONFIG } = require('./cfg.js');
 
+logger.configure({
+  open: CONFIG.LOG_OPEN,
+  enableCaller: CONFIG.LOG_ENABLE_CALLER,
+  level: CONFIG.LOG_LEVEL
+});
 // 获取系统运行毫秒数
 function GetTickCount() {
   return Math.floor(os.uptime() * 1000);
