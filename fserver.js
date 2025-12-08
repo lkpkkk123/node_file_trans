@@ -3,11 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
-const logger = require('./logger');
+const logger = require('./logger').logger;
 const TcpProtocol = require('./tcp_protocol');
-const createLog=require('./logger').create;
 const { ServerConfig: CONFIG } = require('./cfg.js');
-createLog('server');
 
 // 获取系统运行毫秒数
 function GetTickCount() {

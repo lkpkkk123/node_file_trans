@@ -43,7 +43,7 @@ class myWatcher {
           // 忽略关闭错误
         }
         this.watchers.delete(dirPath);
-        console.log(`已关闭子目录监控: ${dirPath}`);
+        //console.log(`已关闭子目录监控: ${dirPath}`);
       }
     }
     

@@ -3,9 +3,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 //引入 TcpProtocol
 const TcpProtocol = require('./tcp_protocol');
-const logger = require('./logger');
-const createLog=require('./logger').create;
-createLog('client');
+const logger = require('./logger').logger;
 // 配置
 const CONFIG = {
   HOST: '127.0.0.1',

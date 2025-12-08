@@ -2,9 +2,7 @@ const myWatcher = require('./fs_watch.js');
 const path = require('path');
 const fs = require('fs');
 const { FileUploadClient } = require('./fclient.js');
-const logger = require('./logger.js');
-const createLog=require('./logger.js').create;
-createLog('watcher');
+const logger = require('./logger').logger;
 
 
 const { WatcherConfig: CONFIG } = require('./cfg.js');
